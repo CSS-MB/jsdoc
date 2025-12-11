@@ -13,7 +13,6 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
-import { log } from '@jsdoc/util';
 
 function buildMessage(tagName, { filename, lineno, comment }, desc) {
   let result = `The @${tagName} tag ${desc}. File: ${filename}, line: ${lineno}`;
@@ -28,9 +27,9 @@ function buildMessage(tagName, { filename, lineno, comment }, desc) {
 /**
  * Validate the given tag.
  */
-export function validate({ dependencies, title, text, value }, tagDef, meta) {
-  const config = dependencies.get('config');
-  const allowUnknownTags = config.tags.allowUnknownTags;
+export function validate({ env, title, text, value }, tagDef, meta) {
+  const { conf, log } = env;
+  const allowUnknownTags = conf.tags.allowUnknownTags;
 
   // handle cases where the tag definition does not exist
   if (!tagDef) {

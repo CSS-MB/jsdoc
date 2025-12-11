@@ -13,6 +13,7 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
+
 import path from 'node:path';
 
 import { Doclet } from '@jsdoc/doclet';
@@ -22,11 +23,11 @@ const __dirname = jsdoc.dirname(import.meta.url);
 
 describe('@overview tag', () => {
   let doclets;
-  const env = jsdoc.deps.get('env');
+  const env = jsdoc.env;
 
   let srcParser;
   const sourceFiles = env.sourceFiles.slice();
-  const sourcePaths = env.opts._.slice();
+  const sourcePaths = env.opts._?.slice();
 
   beforeEach(() => {
     env.opts._ = [path.normalize(`${__dirname}/../../fixtures`)];
@@ -38,13 +39,14 @@ describe('@overview tag', () => {
   afterEach(() => {
     env.opts._ = sourcePaths;
     env.sourceFiles = sourceFiles;
+    srcParser._stopListening();
   });
 
   it('When a file overview tag appears in a doclet, the name of the doclet should contain the path to the file.', () => {
     const filename = path.resolve(__dirname, '../../fixtures/file.js');
 
     env.sourceFiles.push(filename);
-    doclets = srcParser.parse(filename);
+    doclets = Array.from(srcParser.parse(filename).doclets);
 
     expect(doclets[0].name).toMatch(/^file\.js$/);
   });
@@ -53,7 +55,7 @@ describe('@overview tag', () => {
     const filename = path.resolve(__dirname, '../../fixtures/file.js');
 
     env.sourceFiles.push(filename);
-    doclets = srcParser.parse(filename);
+    doclets = Array.from(srcParser.parse(filename).doclets);
 
     expect(doclets[0].name).toBe(doclets[0].longname);
   });
@@ -76,7 +78,7 @@ describe('@overview tag', () => {
         lineno: 1,
         filename: fakePath,
       };
-      doclet = new Doclet(docletSrc, docletMeta, jsdoc.deps);
+      doclet = new Doclet(docletSrc, docletMeta, jsdoc.env);
       doclet.addTag('file', 'A random file.');
 
       expect(doclet.name).toBe('somefile.js');

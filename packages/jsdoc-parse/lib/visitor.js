@@ -13,9 +13,12 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
+
+import path from 'node:path';
+
 import { astNode, Syntax } from '@jsdoc/ast';
-import { name } from '@jsdoc/core';
-import { combineDoclets } from '@jsdoc/doclet';
+import { Doclet } from '@jsdoc/doclet';
+import * as name from '@jsdoc/name';
 
 const { getBasename, LONGNAMES } = name;
 
@@ -48,17 +51,13 @@ function isBlockComment({ type }) {
  */
 function isValidJsdoc(commentSrc) {
   return (
-    commentSrc &&
-    commentSrc.length > 4 &&
-    commentSrc.indexOf('/**') === 0 &&
-    commentSrc.indexOf('/***') !== 0
+    commentSrc?.length > 4 && commentSrc?.indexOf('/**') === 0 && commentSrc?.indexOf('/***') !== 0
   );
 }
 
 // TODO: docs
-function getLeadingJsdocComment(node) {
+function getLeadingJsdocComment({ leadingComments }) {
   let comment = null;
-  let leadingComments = node.leadingComments;
 
   if (Array.isArray(leadingComments) && leadingComments.length) {
     // the attached comments may include line comments, which we don't want
@@ -81,7 +80,7 @@ function getLeadingJsdocComment(node) {
 function makeVarsFinisher(scopeDoclet) {
   return ({ doclet, code }) => {
     // no need to evaluate all things related to scopeDoclet again, just use it
-    if (scopeDoclet && doclet && (doclet.alias || doclet.memberof)) {
+    if (scopeDoclet && (doclet?.alias || doclet?.memberof)) {
       scopeDoclet.meta.vars[code.name] = doclet.longname;
     }
   };
@@ -89,13 +88,7 @@ function makeVarsFinisher(scopeDoclet) {
 
 // Given an event, get the parent node's doclet.
 function getParentDocletFromEvent(parser, { doclet }) {
-  if (
-    doclet &&
-    doclet.meta &&
-    doclet.meta.code &&
-    doclet.meta.code.node &&
-    doclet.meta.code.node.parent
-  ) {
+  if (doclet?.meta?.code?.node?.parent) {
     return parser._getDocletById(doclet.meta.code.node.parent.nodeId);
   }
 
@@ -115,6 +108,7 @@ function getParentDocletFromEvent(parser, { doclet }) {
 function makeInlineParamsFinisher(parser) {
   return (e) => {
     let documentedParams;
+    const { doclet: eventDoclet } = e;
     let knownParams;
     let param;
     let parentDoclet;
@@ -128,34 +122,34 @@ function makeInlineParamsFinisher(parser) {
 
     // we only want to use the doclet if it's param-specific (but not, for example, if it's
     // a param tagged with `@exports` in an AMD module)
-    if (e.doclet.kind !== 'param') {
+    if (eventDoclet.kind !== 'param') {
       return;
     }
 
-    parentDoclet.params = parentDoclet.params || [];
+    parentDoclet.params ??= [];
     documentedParams = parentDoclet.params;
-    knownParams = parentDoclet.meta.code.paramnames || [];
+    knownParams = parentDoclet.meta.code.paramnames ?? [];
 
     while (true) {
       param = documentedParams[i];
 
       // is the param already documented? if so, we don't need to use the doclet
-      if (param && param.name === e.doclet.name) {
-        e.doclet.undocumented = true;
+      if (param?.name === eventDoclet.name) {
+        eventDoclet.undocumented = true;
         break;
       }
 
       // if we ran out of documented params, or we're at the parameter's actual position,
       // splice in the param at the current index
-      if (!param || i === knownParams.indexOf(e.doclet.name)) {
+      if (!param || i === knownParams.indexOf(eventDoclet.name)) {
         documentedParams.splice(i, 0, {
-          type: e.doclet.type || {},
+          type: eventDoclet.type ?? {},
           description: '',
-          name: e.doclet.name,
+          name: eventDoclet.name,
         });
 
         // the doclet is no longer needed
-        e.doclet.undocumented = true;
+        eventDoclet.undocumented = true;
 
         break;
       }
@@ -199,8 +193,7 @@ function findRestParam(params) {
  * the parameter is repeatable.
  */
 function makeRestParamFinisher() {
-  return (e) => {
-    const doclet = e.doclet;
+  return ({ code, doclet }) => {
     let documentedParams;
     let restNode;
 
@@ -208,12 +201,9 @@ function makeRestParamFinisher() {
       return;
     }
 
-    documentedParams = doclet.params = doclet.params || [];
+    documentedParams = doclet.params ??= [];
     restNode = findRestParam(
-      e.code.node.params ||
-        (e.code.node.value && e.code.node.value.params) ||
-        (e.code.node.init && e.code.node.init.params) ||
-        []
+      code.node.params || code.node.value?.params || code.node.init?.params || []
     );
 
     if (restNode) {
@@ -264,9 +254,8 @@ function findDefaultParams(params) {
  * parameters.
  */
 function makeDefaultParamFinisher() {
-  return (e) => {
+  return ({ code, doclet }) => {
     let defaultValues;
-    const doclet = e.doclet;
     let documentedParams;
     let paramName;
     let params;
@@ -275,8 +264,8 @@ function makeDefaultParamFinisher() {
       return;
     }
 
-    documentedParams = doclet.params = doclet.params || [];
-    params = e.code.node.params || (e.code.node.value && e.code.node.value.params) || [];
+    documentedParams = doclet.params ??= [];
+    params = code.node.params ?? code.node.value?.params ?? [];
     defaultValues = findDefaultParams(params);
 
     for (let i = 0, j = 0, l = params.length; i < l; i++) {
@@ -295,9 +284,7 @@ function makeDefaultParamFinisher() {
       // add the default value iff a) a literal default value is defined in the code,
       // b) no default value is documented, and c) the default value is not an empty string
       if (
-        defaultValues[i] &&
-        defaultValues[i].right &&
-        defaultValues[i].right.type === Syntax.Literal &&
+        defaultValues[i]?.right?.type === Syntax.Literal &&
         typeof documentedParams[j].defaultvalue === 'undefined' &&
         defaultValues[i].right.value !== ''
       ) {
@@ -321,32 +308,32 @@ function makeDefaultParamFinisher() {
  * @return {function} A function that merges the constructor's doclet into the class's doclet.
  */
 function makeConstructorFinisher(parser) {
-  return (e) => {
+  return ({ code, doclet: eventDoclet }) => {
     let combined;
-    const eventDoclet = e.doclet;
+    let doclets;
+    let nodeId;
     let parentDoclet;
 
     // for class declarations that are named module exports, the node that's documented is the
     // ExportNamedDeclaration, not the ClassDeclaration
-    if (
-      e.code.node.parent.parent.parent &&
-      e.code.node.parent.parent.parent.type === Syntax.ExportNamedDeclaration
-    ) {
-      parentDoclet = parser._getDocletById(e.code.node.parent.parent.parent.nodeId);
+    if (code.node.parent.parent.parent?.type === Syntax.ExportNamedDeclaration) {
+      nodeId = code.node.parent.parent.parent.nodeId;
     }
     // otherwise, we want the ClassDeclaration
     else {
-      parentDoclet = parser._getDocletById(e.code.node.parent.parent.nodeId);
+      nodeId = code.node.parent.parent.nodeId;
     }
+    doclets = parser._docletStore.docletsByNodeId.get(nodeId);
+    // Use the first documented doclet for the parent node.
+    parentDoclet = Array.from(doclets || []).filter((d) => !d.undocumented)[0];
 
-    if (!eventDoclet || !parentDoclet || parentDoclet.undocumented) {
+    if (!eventDoclet || !parentDoclet) {
       return;
     }
 
     // We prefer the parent doclet because it has the correct kind, longname, and memberof.
     // The child doclet might or might not have the correct kind, longname, and memberof.
-    combined = combineDoclets(parentDoclet, eventDoclet, parser.dependencies);
-
+    combined = Doclet.combineDoclets(parentDoclet, eventDoclet, parser.env);
     parser.addResult(combined);
 
     parentDoclet.undocumented = eventDoclet.undocumented = true;
@@ -360,18 +347,12 @@ function makeConstructorFinisher(parser) {
  * @return {function} A function that adds an `async` property to the doclet of async functions.
  */
 function makeAsyncFunctionFinisher() {
-  return (e) => {
-    const doclet = e.doclet;
-
+  return ({ code, doclet }) => {
     if (!doclet) {
       return;
     }
 
-    if (
-      e.code.node.async ||
-      (e.code.node.value && e.code.node.value.async) ||
-      (e.code.node.init && e.code.node.init.async)
-    ) {
+    if (code.node.async || code.node.value?.async || code.node.init?.async) {
       doclet.async = true;
     }
   };
@@ -396,19 +377,37 @@ function makePrivatePropertyFinisher() {
  * @return {function} A function that marks a doclet as a generator function.
  */
 function makeGeneratorFinisher() {
-  return (e) => {
-    const doclet = e.doclet;
-
+  return ({ code, doclet }) => {
     if (!doclet) {
       return;
     }
 
-    if (
-      e.code.node.generator ||
-      (e.code.node.init && e.code.node.init.generator) ||
-      (e.code.node.value && e.code.node.value.generator)
-    ) {
+    if (code.node.generator || code.node.init?.generator || code.node.value?.generator) {
       doclet.generator = true;
+    }
+  };
+}
+
+/**
+ * Creates a function that adds the source file's module type to a doclet.
+ *
+ * @private
+ * @return {function} A function that adds the module type to the doclet's `meta` info.
+ */
+function makeModuleTypeFinisher(moduleTypes) {
+  return ({ doclet }) => {
+    let filepath;
+    let type;
+
+    if (!doclet || !doclet.meta.filename || !doclet.meta.path) {
+      return;
+    }
+
+    filepath = path.join(doclet.meta.path, doclet.meta.filename);
+    type = moduleTypes.get(filepath);
+
+    if (type) {
+      doclet.meta.moduletype = type;
     }
   };
 }
@@ -416,7 +415,7 @@ function makeGeneratorFinisher() {
 // TODO: docs
 class SymbolFound {
   // TODO: docs
-  constructor(node, filename, extras = {}) {
+  constructor(node, parser, filename, extras = {}) {
     this.id = extras.id || node.nodeId;
     this.comment = extras.comment || getLeadingJsdocComment(node) || '@undocumented';
     this.lineno = extras.lineno || node.loc.start.line;
@@ -427,6 +426,7 @@ class SymbolFound {
     this.code = extras.code;
     this.event = extras.event || 'symbolFound';
     this.finishers = extras.finishers || [];
+    this.moduletype = null;
 
     // make sure the event includes properties that don't have default values
     Object.keys(extras).forEach((key) => {
@@ -454,9 +454,7 @@ class JsdocCommentFound {
 // TODO: docs
 function hasComments(node) {
   return (
-    (node && node.leadingComments && node.leadingComments.length) ||
-    (node && node.trailingComments && node.trailingComments.length) ||
-    (node && node.innerComments && node.innerComments.length)
+    node?.leadingComments?.length || node?.trailingComments?.length || node?.innerComments?.length
   );
 }
 
@@ -483,7 +481,7 @@ function trackVars(parser, { enclosingScope }, { code, finishers }) {
   }
 
   if (doclet) {
-    doclet.meta.vars = doclet.meta.vars || {};
+    doclet.meta.vars ??= {};
     doclet.meta.vars[code.name] = null;
     finishers.push(makeVarsFinisher(doclet));
   }
@@ -497,12 +495,13 @@ function makeSymbolFoundEvent(node, parser, filename) {
 
   const extras = {
     code: astNode.getInfo(node),
+    finishers: [makeModuleTypeFinisher(parser.moduleTypes)],
   };
 
   switch (node.type) {
     // like: i = 0;
     case Syntax.AssignmentExpression:
-      e = new SymbolFound(node, filename, extras);
+      e = new SymbolFound(node, parser, filename, extras);
 
       trackVars(parser, node, e);
 
@@ -518,8 +517,8 @@ function makeSymbolFoundEvent(node, parser, filename) {
       parent = node.parent;
 
       if (node.leadingComments && parent && astNode.isFunction(parent)) {
-        extras.finishers = [makeInlineParamsFinisher(parser)];
-        e = new SymbolFound(node, filename, extras);
+        extras.finishers.push(makeInlineParamsFinisher(parser));
+        e = new SymbolFound(node, parser, filename, extras);
 
         trackVars(parser, node, e);
       }
@@ -532,7 +531,7 @@ function makeSymbolFoundEvent(node, parser, filename) {
 
     // like: let MyClass = class {}
     case Syntax.ClassExpression:
-      e = new SymbolFound(node, filename, extras);
+      e = new SymbolFound(node, parser, filename, extras);
 
       trackVars(parser, node, e);
 
@@ -542,23 +541,23 @@ function makeSymbolFoundEvent(node, parser, filename) {
 
     // like `#b = 1` in: class A { #b = 1; }
     case Syntax.ClassPrivateProperty:
-      extras.finishers = [parser.resolveEnum, makePrivatePropertyFinisher()];
+      extras.finishers.push(parser.resolveEnum, makePrivatePropertyFinisher());
 
-      e = new SymbolFound(node, filename, extras);
+      e = new SymbolFound(node, parser, filename, extras);
 
       break;
 
     // like `b = 1` in: class A { b = 1; }
     case Syntax.ClassProperty:
-      extras.finishers = [parser.resolveEnum];
+      extras.finishers.push(parser.resolveEnum);
 
-      e = new SymbolFound(node, filename, extras);
+      e = new SymbolFound(node, parser, filename, extras);
 
       break;
 
     // like: export * from 'foo'
     case Syntax.ExportAllDeclaration:
-      e = new SymbolFound(node, filename, extras);
+      e = new SymbolFound(node, parser, filename, extras);
 
       break;
 
@@ -573,7 +572,7 @@ function makeSymbolFoundEvent(node, parser, filename) {
 
     // like `foo as bar` in: export {foo as bar}
     case Syntax.ExportSpecifier:
-      e = new SymbolFound(node, filename, extras);
+      e = new SymbolFound(node, parser, filename, extras);
 
       trackVars(parser, node, e);
 
@@ -589,7 +588,7 @@ function makeSymbolFoundEvent(node, parser, filename) {
 
     // like: var foo = function() {};
     case Syntax.FunctionExpression:
-      extras.finishers = [
+      extras.finishers.push(
         // handle cases where at least one parameter has a default value
         makeDefaultParamFinisher(),
         // handle rest parameters
@@ -597,10 +596,10 @@ function makeSymbolFoundEvent(node, parser, filename) {
         // handle async functions
         makeAsyncFunctionFinisher(),
         // handle generator functions
-        makeGeneratorFinisher(),
-      ];
+        makeGeneratorFinisher()
+      );
 
-      e = new SymbolFound(node, filename, extras);
+      e = new SymbolFound(node, parser, filename, extras);
 
       trackVars(parser, node, e);
 
@@ -618,8 +617,8 @@ function makeSymbolFoundEvent(node, parser, filename) {
 
       // function parameters with inline comments
       if (node.leadingComments && parent && astNode.isFunction(parent)) {
-        extras.finishers = [makeInlineParamsFinisher(parser)];
-        e = new SymbolFound(node, filename, extras);
+        extras.finishers.push(makeInlineParamsFinisher(parser));
+        e = new SymbolFound(node, parser, filename, extras);
 
         trackVars(parser, node, e);
       }
@@ -631,7 +630,7 @@ function makeSymbolFoundEvent(node, parser, filename) {
     // No need to fire an event unless the node is already commented.
     case Syntax.MemberExpression:
       if (node.leadingComments) {
-        e = new SymbolFound(node, filename, extras);
+        e = new SymbolFound(node, parser, filename, extras);
       }
 
       break;
@@ -639,7 +638,7 @@ function makeSymbolFoundEvent(node, parser, filename) {
     // like: foo() {}
     // or:   constructor() {}
     case Syntax.MethodDefinition:
-      extras.finishers = [
+      extras.finishers.push(
         // handle cases where at least one parameter has a default value
         makeDefaultParamFinisher(),
         // handle rest parameters
@@ -647,20 +646,20 @@ function makeSymbolFoundEvent(node, parser, filename) {
         // handle async functions
         makeAsyncFunctionFinisher(),
         // handle generator functions
-        makeGeneratorFinisher(),
-      ];
+        makeGeneratorFinisher()
+      );
       // for constructors, we attempt to merge the constructor's docs into the class's docs
       if (node.kind === 'constructor') {
         extras.finishers.push(makeConstructorFinisher(parser));
       }
 
-      e = new SymbolFound(node, filename, extras);
+      e = new SymbolFound(node, parser, filename, extras);
 
       break;
 
     // like `{}` in: function Foo = Class.create(/** @lends Foo */ {});
     case Syntax.ObjectExpression:
-      e = new SymbolFound(node, filename, extras);
+      e = new SymbolFound(node, parser, filename, extras);
 
       break;
 
@@ -668,10 +667,10 @@ function makeSymbolFoundEvent(node, parser, filename) {
     // like `get bar() {}` in: var foo = { get bar() {} };
     case Syntax.Property:
       if (node.kind !== 'get' && node.kind !== 'set') {
-        extras.finishers = [parser.resolveEnum];
+        extras.finishers.push(parser.resolveEnum);
       }
 
-      e = new SymbolFound(node, filename, extras);
+      e = new SymbolFound(node, parser, filename, extras);
 
       break;
 
@@ -680,8 +679,8 @@ function makeSymbolFoundEvent(node, parser, filename) {
       parent = node.parent;
 
       if (node.leadingComments && parent && astNode.isFunction(parent)) {
-        extras.finishers = [makeInlineParamsFinisher(parser)];
-        e = new SymbolFound(node, filename, extras);
+        extras.finishers.push(makeInlineParamsFinisher(parser));
+        e = new SymbolFound(node, parser, filename, extras);
 
         trackVars(parser, node, e);
       }
@@ -690,7 +689,7 @@ function makeSymbolFoundEvent(node, parser, filename) {
 
     // like: var i = 0;
     case Syntax.VariableDeclarator:
-      extras.finishers = [
+      extras.finishers.push(
         // handle cases where at least one parameter has a default value
         makeDefaultParamFinisher(),
         // handle rest parameters
@@ -698,10 +697,10 @@ function makeSymbolFoundEvent(node, parser, filename) {
         // handle async functions
         makeAsyncFunctionFinisher(),
         // handle generator functions
-        makeGeneratorFinisher(),
-      ];
+        makeGeneratorFinisher()
+      );
 
-      e = new SymbolFound(node, filename, extras);
+      e = new SymbolFound(node, parser, filename, extras);
 
       trackVars(parser, node, e);
 
@@ -775,7 +774,6 @@ export class Visitor {
     return true;
   }
 
-  /* eslint-disable class-methods-use-this */
   // TODO: docs
   visitNodeComments(node, parser, filename) {
     let comments;
@@ -793,17 +791,17 @@ export class Visitor {
 
     comments = isBlock ? [node] : [];
 
-    if (node.leadingComments && node.leadingComments.length) {
+    if (node.leadingComments?.length) {
       addComments(node.leadingComments);
     }
 
     // trailing comments are always duplicates of leading comments unless they're attached to the
     // Program node
-    if (node.type === Syntax.Program && node.trailingComments && node.trailingComments.length) {
+    if (node.type === Syntax.Program && node.trailingComments?.length) {
       addComments(node.trailingComments);
     }
 
-    if (node.innerComments && node.innerComments.length) {
+    if (node.innerComments?.length) {
       addComments(node.innerComments);
     }
 
@@ -823,13 +821,12 @@ export class Visitor {
 
     return true;
   }
-  /* eslint-enable class-methods-use-this */
 
   // TODO: docs
   visitNode(node, parser, filename) {
     const e = makeSymbolFoundEvent(node, parser, filename);
 
-    if (this._nodeVisitors && this._nodeVisitors.length) {
+    if (this._nodeVisitors?.length) {
       for (let visitor of this._nodeVisitors) {
         visitor.visitNode(node, e, parser, filename);
         if (e.stopPropagation) {

@@ -106,17 +106,16 @@ export const TYPE_PROPERTY_SCHEMA = {
   type: OBJECT,
   additionalProperties: false,
   properties: {
+    // original type expression
+    expression: {
+      type: STRING,
+    },
     names: {
       type: ARRAY,
       minItems: 1,
       items: {
         type: STRING,
       },
-    },
-    // type parser output
-    parsedType: {
-      type: OBJECT,
-      additionalProperties: true,
     },
   },
 };
@@ -332,15 +331,13 @@ export const DOCLET_SCHEMA = {
         inherited: true,
       },
     },
-    isEnum: {
-      type: BOOLEAN,
-    },
     // what kind of symbol is this?
     kind: {
       type: STRING,
       enum: [
         'class',
         'constant',
+        'enum',
         'event',
         'external',
         'file',

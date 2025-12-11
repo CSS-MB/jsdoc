@@ -13,7 +13,7 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
-/* global jsdoc */
+
 import path from 'node:path';
 
 import * as plugins from '../../../lib/plugins.js';
@@ -50,7 +50,7 @@ describe('@jsdoc/core/lib/plugins', () => {
 
       init();
 
-      await plugins.installPlugins([pluginPath], parser, jsdoc.deps);
+      await plugins.installPlugins([pluginPath], parser, jsdoc.env);
       jsdoc.getDocSetFromFile(
         path.resolve(__dirname, '../../fixtures/plugin-source-file.js'),
         parser
@@ -71,7 +71,7 @@ describe('@jsdoc/core/lib/plugins', () => {
 
       init();
 
-      await plugins.installPlugins([pluginPath], parser, jsdoc.deps);
+      await plugins.installPlugins([pluginPath], parser, jsdoc.env);
       jsdoc.getDocSetFromFile(
         path.resolve(__dirname, '../../fixtures/plugin-source-file.js'),
         parser
@@ -85,7 +85,7 @@ describe('@jsdoc/core/lib/plugins', () => {
       const doclets = [];
       let pluginPath = path.resolve(__dirname, '../../fixtures/plugin-test-tags.js');
 
-      await plugins.installPlugins([pluginPath], parser, jsdoc.deps);
+      await plugins.installPlugins([pluginPath], parser, jsdoc.env);
       parser.on('newDoclet', (e) => {
         if (e.doclet.longname === 'test') {
           doclets.push(e.doclet);

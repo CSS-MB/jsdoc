@@ -13,10 +13,10 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
+
 /**
  * Traversal utilities for ASTs that are compatible with the ESTree API.
  */
-import { log } from '@jsdoc/util';
 
 import * as astNode from './ast-node.js';
 import { Syntax } from './syntax.js';
@@ -53,9 +53,8 @@ function moveTrailingComments(source, target, count) {
   }
 }
 
-/* eslint-disable no-empty-function, no-unused-vars */
+// eslint-disable-next-line no-empty-function, no-unused-vars
 function leafNode(node, parent, state, cb) {}
-/* eslint-enable no-empty-function, no-unused-vars */
 
 // TODO: docs
 export const walkers = {};
@@ -640,68 +639,73 @@ walkers[Syntax.YieldExpression] = (node, parent, state, cb) => {
   }
 };
 
+function handleNode(node, parent, cbState) {
+  let currentScope;
+  const isScope = astNode.isScope(node);
+  let moduleType;
+  const { walker } = cbState;
+
+  astNode.addNodeProperties(node);
+  node.parent = parent || null;
+
+  currentScope = getCurrentScope(cbState.scopes);
+  if (currentScope) {
+    node.enclosingScope = currentScope;
+  }
+
+  if (isScope) {
+    cbState.scopes.push(node);
+  }
+  cbState.nodes.push(node);
+
+  if (!cbState.moduleType) {
+    moduleType = cbState.moduleType = astNode.detectModuleType(node);
+    if (moduleType) {
+      cbState.moduleTypes.set(cbState.filename, moduleType);
+    }
+  }
+
+  if (!walker._walkers[node.type]) {
+    walker._logUnknownNodeType(node);
+  } else {
+    walker._walkers[node.type](node, parent, cbState, handleNode);
+  }
+
+  if (isScope) {
+    cbState.scopes.pop();
+  }
+}
+
 /**
  * A walker that can traverse an ESTree AST.
  */
 export class Walker {
   // TODO: docs
-  constructor(walkerFuncs = walkers) {
+  constructor(env, { moduleTypes }, walkerFuncs = walkers) {
+    this._log = env.log;
+    this._moduleTypes = moduleTypes;
     this._walkers = walkerFuncs;
   }
 
-  // TODO: docs
-  _recurse(filename, ast) {
-    const self = this;
-    const state = {
-      filename: filename,
-      nodes: [],
-      scopes: [],
-    };
-
-    function logUnknownNodeType({ type }) {
-      log.debug(
-        `Found a node with unrecognized type ${type}. Ignoring the node and its descendants.`
-      );
-    }
-
-    function cb(node, parent, cbState) {
-      let currentScope;
-
-      const isScope = astNode.isScope(node);
-
-      astNode.addNodeProperties(node);
-      node.parent = parent || null;
-
-      currentScope = getCurrentScope(cbState.scopes);
-      if (currentScope) {
-        node.enclosingScope = currentScope;
-      }
-
-      if (isScope) {
-        cbState.scopes.push(node);
-      }
-      cbState.nodes.push(node);
-
-      if (!self._walkers[node.type]) {
-        logUnknownNodeType(node);
-      } else {
-        self._walkers[node.type](node, parent, cbState, cb);
-      }
-
-      if (isScope) {
-        cbState.scopes.pop();
-      }
-    }
-
-    cb(ast, null, state);
-
-    return state;
+  _logUnknownNodeType({ type }) {
+    this._log.debug(
+      `Found a node with unrecognized type ${type}. Ignoring the node and its descendants.`
+    );
   }
 
   // TODO: docs
   recurse(ast, visitor, filename) {
     let shouldContinue;
-    const state = this._recurse(filename, ast);
+    const state = {
+      filename: filename,
+      moduleType: null,
+      moduleTypes: this._moduleTypes,
+      nodes: [],
+      scopes: [],
+      walker: this,
+    };
+
+    handleNode(ast, null, state);
 
     if (visitor) {
       for (let node of state.nodes) {
@@ -712,6 +716,10 @@ export class Walker {
       }
     }
 
-    return ast;
+    return {
+      ast,
+      filename: state.filename,
+      moduleType: state.moduleType,
+    };
   }
 }

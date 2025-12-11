@@ -13,63 +13,60 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
+
 /**
  * Functionality related to JSDoc tags.
  */
+
 import path from 'node:path';
 
-import { log } from '@jsdoc/util';
 import _ from 'lodash';
 
 import * as type from './type.js';
 import * as tagValidator from './validator.js';
 
+const REGEXP_LEADING_SPACES_TABS = /^([ \t]+)/;
+const REGEXP_LEADING_TRAILING_LINE_BREAKS = /^[\n\r\f]+|[\n\r\f]+$/g;
+const REGEXP_LEADING_TRAILING_WHITESPACE = /(?:^\s+)|(?:\s+$)/;
+
 // Check whether the text is the same as a symbol name with leading or trailing whitespace. If so,
 // the whitespace must be preserved, and the text cannot be trimmed.
 function mustPreserveWhitespace(text, meta) {
-  return meta && meta.code && meta.code.name === text && text.match(/(?:^\s+)|(?:\s+$)/);
+  return meta?.code?.name === text && text.match(REGEXP_LEADING_TRAILING_WHITESPACE);
 }
 
 function trim(text, opts, meta) {
   let indentMatcher;
   let match;
+  let str = _.isString(text) ? text : String(text ?? '');
 
-  opts = opts || {};
-  text = String(_.isNull(text) || _.isUndefined(text) ? '' : text);
-
-  if (mustPreserveWhitespace(text, meta)) {
-    text = `"${text}"`;
-  } else if (opts.keepsWhitespace) {
-    text = text.replace(/^[\n\r\f]+|[\n\r\f]+$/g, '');
+  if (mustPreserveWhitespace(str, meta)) {
+    str = `"${str}"`;
+  } else if (opts?.keepsWhitespace) {
+    str = str.replace(REGEXP_LEADING_TRAILING_LINE_BREAKS, '');
     if (opts.removesIndent) {
-      match = text.match(/^([ \t]+)/);
+      // Identify leading spaces and tabs on the first line.
+      match = str.match(REGEXP_LEADING_SPACES_TABS);
       if (match && match[1]) {
+        // Remove only those leading spaces and tabs on subsequent lines.
         indentMatcher = new RegExp(`^${match[1]}`, 'gm');
-        text = text.replace(indentMatcher, '');
+        str = str.replace(indentMatcher, '');
       }
     }
   } else {
-    text = text.replace(/^\s+|\s+$/g, '');
+    str = str.trim();
   }
 
-  return text;
+  return str;
 }
 
-function addHiddenProperty(obj, propName, propValue, dependencies) {
-  const options = dependencies.get('options');
+function parseType({ env, text, originalTitle }, { canHaveName, canHaveType }, meta) {
+  let log;
 
-  Object.defineProperty(obj, propName, {
-    value: propValue,
-    writable: true,
-    enumerable: Boolean(options.debug),
-    configurable: true,
-  });
-}
-
-function parseType({ text, originalTitle }, { canHaveName, canHaveType }, meta) {
   try {
     return type.parse(text, canHaveName, canHaveType);
   } catch (e) {
+    log = env.log;
     log.error(
       'Unable to parse a tag\'s type expression%s with tag title "%s" and text "%s": %s',
       meta.path && meta.filename
@@ -86,7 +83,7 @@ function parseType({ text, originalTitle }, { canHaveName, canHaveType }, meta) 
   }
 }
 
-function processTagText(tagInstance, tagDef, meta, dependencies) {
+function processTagText(tagInstance, tagDef, meta) {
   let tagType;
 
   if (tagDef.onTagText) {
@@ -101,19 +98,19 @@ function processTagText(tagInstance, tagDef, meta, dependencies) {
     if (tagType.type) {
       if (tagType.type.length) {
         tagInstance.value.type = {
+          expression: tagType.typeExpression,
           names: tagType.type,
         };
-        addHiddenProperty(tagInstance.value.type, 'parsedType', tagType.parsedType, dependencies);
       }
 
       ['optional', 'nullable', 'variable', 'defaultvalue'].forEach((prop) => {
-        if (typeof tagType[prop] !== 'undefined') {
+        if (!_.isUndefined(tagType[prop])) {
           tagInstance.value[prop] = tagType[prop];
         }
       });
     }
 
-    if (tagType.text && tagType.text.length) {
+    if (tagType.text?.length) {
       tagInstance.value.description = tagType.text;
     }
 
@@ -138,18 +135,18 @@ export class Tag {
    * @param {string} tagTitle
    * @param {string} tagBody
    * @param {object} meta
-   * @param {object} dependencies
+   * @param {object} env
    */
-  constructor(tagTitle, tagBody, meta, dependencies) {
-    const dictionary = dependencies.get('tags');
+  constructor(tagTitle, tagBody, meta, env) {
+    const dictionary = env.tags;
     let tagDef;
     let trimOpts;
 
     meta = meta || {};
 
-    Object.defineProperty(this, 'dependencies', {
+    Object.defineProperty(this, 'env', {
       enumerable: false,
-      value: dependencies,
+      value: env,
     });
     this.originalTitle = trim(tagTitle);
 
@@ -183,7 +180,7 @@ export class Tag {
     this.text = trim(tagBody, trimOpts, meta);
 
     if (this.text) {
-      processTagText(this, tagDef, meta, dependencies);
+      processTagText(this, tagDef, meta);
     }
 
     tagValidator.validate(this, tagDef, meta);

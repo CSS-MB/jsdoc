@@ -13,86 +13,18 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
-import { EventBus } from '@jsdoc/util';
+
+import { Api, config as jsdocConfig } from '@jsdoc/core';
+import { getLogFunctions } from '@jsdoc/util';
 import _ from 'lodash';
 import ow from 'ow';
-import yargs from 'yargs-parser';
 
-import flags from './flags.js';
+import { flags, parseFlags } from './flags.js';
 import help from './help.js';
 import { LEVELS, Logger } from './logger.js';
 
-function validateChoice(flagInfo, choices, values) {
-  let flagNames = flagInfo.alias ? `-${flagInfo.alias}/` : '';
-
-  flagNames += `--${flagInfo.name}`;
-
-  for (let value of values) {
-    if (!choices.includes(value)) {
-      throw new TypeError(`The flag ${flagNames} accepts only these values: ${choices.join(', ')}`);
-    }
-  }
-}
-
-/**
- * `KNOWN_FLAGS` is a set of all known flag names, including the long and short forms.
- *
- * `YARGS_FLAGS` is details about the known command-line flags, but in a form that `yargs-parser`
- * understands. (That form is relatively hard to read, so we build this object from the more
- * readable `flags` object.)
- *
- * @private
- */
-const { KNOWN_FLAGS, YARGS_FLAGS } = (() => {
-  const names = new Set();
-  const opts = {
-    alias: {},
-    array: [],
-    boolean: [],
-    coerce: {},
-    narg: {},
-    normalize: [],
-  };
-
-  // `_` contains unparsed arguments.
-  names.add('_');
-
-  Object.keys(flags).forEach((flag) => {
-    const value = flags[flag];
-
-    names.add(flag);
-
-    if (value.alias) {
-      names.add(value.alias);
-      opts.alias[flag] = [value.alias];
-    }
-
-    if (value.array) {
-      opts.array.push(flag);
-    }
-
-    if (value.boolean) {
-      opts.boolean.push(flag);
-    }
-
-    if (value.coerce) {
-      opts.coerce[flag] = value.coerce;
-    }
-
-    if (value.normalize) {
-      opts.normalize.push(flag);
-    }
-
-    if (value.requiresArg) {
-      opts.narg[flag] = 1;
-    }
-  });
-
-  return {
-    KNOWN_FLAGS: names,
-    YARGS_FLAGS: opts,
-  };
-})();
+const FATAL_ERROR_MESSAGE =
+  'Exiting JSDoc because an error occurred. See the previous log messages for details.';
 
 /**
  * CLI engine for JSDoc.
@@ -100,6 +32,15 @@ const { KNOWN_FLAGS, YARGS_FLAGS } = (() => {
  * @alias module:@jsdoc/cli
  */
 export default class Engine {
+  /**
+   * The log levels that JSDoc's logger accepts. The key is an identifier, like `ERROR` or `WARN`.
+   * The value is an integer, with higher numbers denoting more important messages.
+   *
+   * @type {Object<string, number>}
+   */
+  static LOG_LEVELS = LEVELS;
+  #logger;
+
   /**
    * Create an instance of the CLI engine.
    *
@@ -112,34 +53,123 @@ export default class Engine {
    */
   constructor(opts = {}) {
     ow(opts, ow.object);
+    ow(opts.emitter, ow.optional.object);
     // The `Logger` class validates `opts.level`, so no need to validate it here.
     ow(opts.revision, ow.optional.date);
-    ow(opts.version, ow.optional.string);
+    ow(opts.version, ow.any(ow.optional.string, ow.optional.object));
 
-    this._bus = new EventBus('jsdoc', {
-      cache: _.isBoolean(opts._cacheEventBus) ? opts._cacheEventBus : true,
-    });
-    this._logger = new Logger({
-      emitter: this._bus,
+    this.api = opts.api ?? new Api({ emitter: opts.emitter });
+    this.emitter = this.api.emitter;
+    this.env = this.api.env;
+    this.flags = [];
+    this.log = opts.log ?? getLogFunctions(this.emitter);
+    this.#logger = new Logger({
+      emitter: this.emitter,
       level: opts.logLevel,
     });
-    this.flags = [];
-    this.revision = opts.revision;
-    this.version = opts.version;
+    // TODO: Make these private when `cli.js` no longer needs them.
+    this.shouldExitWithError = false;
+    this.shouldPrintHelp = false;
+    // Support the format used by `Env`.
+    // TODO: Make the formats consistent.
+    if (_.isObject(opts.version)) {
+      this.env.version = opts.version;
+      this.version = opts.version.number;
+      this.revision = new Date(opts.version.revision);
+      this.env.version.revision = opts.version.revision;
+    } else {
+      this.env.version = {};
+      this.version = this.env.version.number = opts.version;
+      this.revision = opts.revision;
+      this.env.version.revision = opts.revision?.toUTCString();
+    }
   }
 
-  /**
-   * The log level to use. Messages are logged only if they are at or above this level.
-   * Must be an enumerated value of {@link module:@jsdoc/cli.LOG_LEVELS}.
-   *
-   * The default value is `module:@jsdoc/cli.LOG_LEVELS.WARN`.
-   */
-  get logLevel() {
-    return this._logger.level;
+  configureLogger() {
+    const fatalError = () => {
+      this.exit(1);
+    };
+    const { LOG_LEVELS } = Engine;
+    const { options } = this.env;
+    const recoverableError = () => {
+      this.shouldExitWithError = true;
+    };
+
+    if (options.test) {
+      this.logLevel = LOG_LEVELS.SILENT;
+    } else {
+      if (options.debug) {
+        this.logLevel = LOG_LEVELS.DEBUG;
+      } else if (options.verbose) {
+        this.logLevel = LOG_LEVELS.INFO;
+      }
+
+      if (options.pedantic) {
+        this.emitter.once('logger:warn', recoverableError);
+        this.emitter.once('logger:error', fatalError);
+      } else {
+        this.emitter.once('logger:error', recoverableError);
+      }
+
+      this.emitter.once('logger:fatal', fatalError);
+    }
   }
 
-  set logLevel(level) {
-    this._logger.level = level;
+  dumpParseResults(docletStore) {
+    let doclets;
+    const { options } = this.env;
+
+    if (options.debug || options.verbose) {
+      doclets = docletStore.allDoclets;
+    } else {
+      doclets = docletStore.doclets;
+    }
+
+    console.log(JSON.stringify(Array.from(doclets), null, 2));
+  }
+
+  exit(exitCode, message) {
+    ow(exitCode, ow.number);
+    ow(message, ow.optional.string);
+
+    if (exitCode > 0) {
+      this.shouldExitWithError = true;
+
+      process.on('exit', () => {
+        if (message) {
+          console.error(message);
+        }
+      });
+    }
+
+    process.on('exit', () => {
+      if (this.shouldPrintHelp) {
+        this.printHelp();
+      }
+      process.exit(exitCode);
+    });
+  }
+
+  async generate() {
+    let docletStore;
+    const { api, env } = this;
+
+    await api.findSourceFiles();
+    if (env.sourceFiles.length === 0) {
+      console.log('There are no input files to process.');
+    } else {
+      docletStore = await api.parseSourceFiles();
+
+      if (env.options.explain) {
+        this.dumpParseResults(docletStore);
+      } else {
+        await api.generateDocs(docletStore);
+      }
+    }
+
+    env.run.finish = new Date();
+
+    return 0;
   }
 
   /**
@@ -158,16 +188,66 @@ export default class Engine {
     ow(opts, ow.object);
     ow(opts.maxLength, ow.optional.number);
 
-    const maxLength = opts.maxLength || Infinity;
+    const maxLength = opts.maxLength ?? Infinity;
 
     return `Options:\n${help({ maxLength })}\n\nVisit https://jsdoc.app/ for more information.`;
   }
 
+  // TODO: Add a typedef for this.
   /**
    * Details about the command-line flags that JSDoc recognizes.
    */
   get knownFlags() {
     return flags;
+  }
+
+  // TODO: Add details about the directory and filenames that this method looks for.
+  /**
+   * Parses command-line flags; loads the JSDoc configuration file; and adds configuration details
+   * to the JSDoc environment.
+   *
+   * For details about supported command-line flags, see the value of the
+   * {@link module:@jsdoc/cli#knownFlags} property.
+   *
+   * @returns {Promise<undefined>} A promise that is fulfilled after the configuration is loaded.
+   */
+  loadConfig() {
+    const { env } = this;
+
+    try {
+      env.opts = _.defaults({}, this.parseFlags(env.args), env.opts);
+    } catch (e) {
+      this.shouldPrintHelp = true;
+      this.exit(1, `${e.message}\n`);
+
+      return Promise.reject(e);
+    }
+
+    // TODO: Await the promise and use try-catch.
+    return jsdocConfig.load(env.opts.configure).then(
+      (conf) => {
+        env.conf = conf.config;
+        // Look for options on the command line, then in the config.
+        env.opts = _.defaults(env.opts, env.conf.opts);
+      },
+      (e) => {
+        this.exit(1, `Cannot parse the config file: ${e}\n${FATAL_ERROR_MESSAGE}`);
+      }
+    );
+  }
+
+  /**
+   * The log level to use. Messages are logged only if they are at or above this level.
+   * Must be an enumerated value of {@link module:@jsdoc/cli.LOG_LEVELS}.
+   *
+   * The default value is `module:@jsdoc/cli.LOG_LEVELS.WARN`.
+   */
+  get logLevel() {
+    return this.#logger.level;
+  }
+
+  set logLevel(level) {
+    this.#logger.level = level;
   }
 
   /**
@@ -176,50 +256,26 @@ export default class Engine {
    * Use the instance's `flags` property to retrieve the parsed flags later.
    *
    * @param {Array<string>} cliFlags - The command-line flags to parse.
-   * @returns {Object} The name and value for each flag. The `_` property contains all arguments
-   * other than flags and their values.
+   * @returns {Object<string, *>} The long name and value for each flag. The `_` property contains
+   * all arguments other than flags and flag values.
    */
   parseFlags(cliFlags) {
-    ow(cliFlags, ow.array);
-
-    let normalizedFlags;
-    let parsed;
-    let parsedFlags;
-    let parsedFlagNames;
-
-    normalizedFlags = Object.keys(flags);
-    parsed = yargs.detailed(cliFlags, YARGS_FLAGS);
-    if (parsed.error) {
-      throw parsed.error;
-    }
-    parsedFlags = parsed.argv;
-    parsedFlagNames = new Set(Object.keys(parsedFlags));
-
-    // Check all parsed flags for unknown flag names.
-    for (let flag of parsedFlagNames) {
-      if (!KNOWN_FLAGS.has(flag)) {
-        throw new TypeError(
-          'Unknown command-line option: ' + (flag.length === 1 ? `-${flag}` : `--${flag}`)
-        );
-      }
-    }
-
-    // Validate the values of known flags.
-    for (let flag of normalizedFlags) {
-      if (parsedFlags[flag] && flags[flag].choices) {
-        let flagInfo = {
-          name: flag,
-          alias: flags[flag].alias,
-        };
-
-        validateChoice(flagInfo, flags[flag].choices, parsedFlags[flag]);
-      }
-    }
-
-    // Only keep the long name of each flag.
-    this.flags = _.pick(parsedFlags, normalizedFlags.concat(['_']));
+    this.flags = parseFlags(cliFlags);
 
     return this.flags;
+  }
+
+  printHelp() {
+    this.printVersion();
+    console.log(this.help({ maxLength: process.stdout.columns }));
+
+    return Promise.resolve(0);
+  }
+
+  printVersion() {
+    console.log(this.versionDetails);
+
+    return Promise.resolve(0);
   }
 
   /**
@@ -239,5 +295,3 @@ export default class Engine {
     return `JSDoc ${this.version} ${revision}`.trim();
   }
 }
-
-Engine.LOG_LEVELS = LEVELS;

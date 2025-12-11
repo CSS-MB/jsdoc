@@ -13,23 +13,31 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
+
 import { Syntax } from '@jsdoc/ast';
-import { name } from '@jsdoc/core';
 import { Doclet } from '@jsdoc/doclet';
-import { log } from '@jsdoc/util';
+import * as name from '@jsdoc/name';
 import escape from 'escape-string-regexp';
 
-const { SCOPE } = name;
+const PROTOTYPE_OWNER_REGEXP = /^(.+?)(\.prototype|#)$/;
+const { LONGNAMES, SCOPE } = name;
+const ESCAPED_MODULE_LONGNAMES = [
+  escape(LONGNAMES.MODULE_DEFAULT_EXPORT),
+  escape(LONGNAMES.MODULE_EXPORT),
+  escape('module.exports'),
+].join('|');
 
 let currentModule = null;
+// Modules inferred from the value of an `@alias` tag, like `@alias module:foo.bar`.
+let inferredModules = [];
 
-class CurrentModule {
+class ModuleInfo {
   constructor(doclet) {
-    this.doclet = doclet;
     this.longname = doclet.longname;
-    this.originalName = doclet.meta.code.name || '';
+    this.originalName = doclet.meta?.code?.name ?? '';
   }
 }
+
 function filterByLongname({ longname }) {
   // you can't document prototypes
   if (/#$/.test(longname)) {
@@ -39,18 +47,18 @@ function filterByLongname({ longname }) {
   return false;
 }
 
-function createDoclet(comment, e, deps) {
+function createDoclet(comment, e, env) {
   let doclet;
   let flatComment;
   let msg;
 
   try {
-    doclet = new Doclet(comment, e, deps);
+    doclet = new Doclet(comment, e, env);
   } catch (error) {
     flatComment = comment.replace(/[\r\n]/g, '');
     msg = `cannot create a doclet for the comment "${flatComment}": ${error.message}`;
-    log.error(msg);
-    doclet = new Doclet('', e, deps);
+    env.log.error(msg);
+    doclet = new Doclet('', e, env);
   }
 
   return doclet;
@@ -75,67 +83,95 @@ function createDoclet(comment, e, deps) {
  *
  * @private
  */
-function createSymbolDoclet(comment, e, deps) {
-  let doclet = createDoclet(comment, e, deps);
+function createSymbolDoclet(comment, e, env) {
+  let doclet = createDoclet(comment, e, env);
 
   if (doclet.name) {
     // try again, without the comment
     e.comment = '@undocumented';
-    doclet = createDoclet(e.comment, e, deps);
+    doclet = createDoclet(e.comment, e, env);
   }
 
   return doclet;
 }
 
-function setCurrentModule(doclet) {
+function getModule() {
+  return inferredModules.length ? inferredModules[inferredModules.length - 1] : currentModule;
+}
+
+function setModule(doclet) {
   if (doclet.kind === 'module') {
-    currentModule = new CurrentModule(doclet);
+    currentModule = new ModuleInfo(doclet);
+  } else if (doclet.longname.startsWith('module:')) {
+    inferredModules.push(
+      new ModuleInfo({
+        longname: name.getBasename(doclet.longname),
+      })
+    );
   }
 }
 
+function isModuleExports(module, doclet) {
+  return module.longname === doclet.name;
+}
+
+/**
+ * Finds an AST node's closest ancestor with the specified type.
+ *
+ * @private
+ * @param {Object} node - The AST node.
+ * @param {(module:@jsdoc/ast.Syntax|string)} ancestorType - The type of ancestor node to find.
+ * @return {?Object} The closest ancestor with the specified type.
+ */
+function findAncestorWithType(node, ancestorType) {
+  let parent = node?.parent;
+
+  while (parent) {
+    if (parent.type === ancestorType) {
+      return parent;
+    }
+
+    parent = parent.parent;
+  }
+
+  return null;
+}
+
 function setModuleScopeMemberOf(parser, doclet) {
+  const moduleInfo = getModule();
+  const node = doclet.meta?.code?.node;
   let parentDoclet;
   let skipMemberof;
 
-  // handle module symbols that are _not_ assigned to module.exports
-  if (currentModule && currentModule.longname !== doclet.name) {
+  // Handle module symbols, excluding CommonJS `module.exports`.
+  if (moduleInfo && !isModuleExports(moduleInfo, doclet)) {
     if (!doclet.scope) {
       // is this a method definition? if so, we usually get the scope from the node directly
-      if (
-        doclet.meta &&
-        doclet.meta.code &&
-        doclet.meta.code.node &&
-        doclet.meta.code.node.type === Syntax.MethodDefinition
-      ) {
+      if (node?.type === Syntax.MethodDefinition) {
+        parentDoclet = parser._getDocletById(node.parent.parent.nodeId);
         // special case for constructors of classes that have @alias tags
-        if (doclet.meta.code.node.kind === 'constructor') {
-          parentDoclet = parser._getDocletById(doclet.meta.code.node.parent.parent.nodeId);
-
-          if (parentDoclet && parentDoclet.alias) {
-            // the constructor should use the same name as the class
-            doclet.addTag('alias', parentDoclet.alias);
-            doclet.addTag('name', parentDoclet.alias);
-
-            // and we shouldn't try to set a memberof value
-            skipMemberof = true;
-          }
-        } else if (doclet.meta.code.node.static) {
-          doclet.addTag('static');
+        if (node.kind === 'constructor' && parentDoclet?.alias) {
+          // the constructor should use the same name as the class
+          doclet.addTag('alias', parentDoclet.alias);
+          doclet.addTag('name', parentDoclet.alias);
+          // and we shouldn't try to set a memberof value
+          skipMemberof = true;
         } else {
-          doclet.addTag('instance');
+          doclet.addTag(node.static ? 'static' : 'instance');
+          // The doclet should be a member of the parent doclet's alias.
+          if (parentDoclet?.alias) {
+            doclet.memberof = parentDoclet.alias;
+          }
         }
       }
-      // is this something that the module exports? if so, it's a static member
+      // Is this something that the module exports? if so, it's a static member.
       else if (
-        doclet.meta &&
-        doclet.meta.code &&
-        doclet.meta.code.node &&
-        doclet.meta.code.node.parent &&
-        doclet.meta.code.node.parent.type === Syntax.ExportNamedDeclaration
+        node?.type === Syntax.ExportNamedDeclaration ||
+        findAncestorWithType(node, Syntax.ExportNamedDeclaration)
       ) {
         doclet.addTag('static');
       }
-      // otherwise, it must be an inner member
+      // Otherwise, it must be an inner member.
       else {
         doclet.addTag('inner');
       }
@@ -143,8 +179,8 @@ function setModuleScopeMemberOf(parser, doclet) {
 
     // if the doclet isn't a memberof anything yet, and it's not a global, it must be a memberof
     // the current module (unless we were told to skip adding memberof)
-    if (!doclet.memberof && doclet.scope !== SCOPE.NAMES.GLOBAL && !skipMemberof) {
-      doclet.addTag('memberof', currentModule.longname);
+    if (!skipMemberof && !doclet.memberof && doclet.scope !== SCOPE.NAMES.GLOBAL) {
+      doclet.addTag('memberof', moduleInfo.longname);
     }
   }
 }
@@ -160,7 +196,7 @@ function addDoclet(parser, newDoclet) {
   let e;
 
   if (newDoclet) {
-    setCurrentModule(newDoclet);
+    setModule(newDoclet);
     e = { doclet: newDoclet };
     parser.emit('newDoclet', e);
 
@@ -170,15 +206,17 @@ function addDoclet(parser, newDoclet) {
   }
 }
 
-function processAlias(parser, doclet, astNode) {
+function processAlias(parser, doclet, node) {
+  let match;
   let memberofName;
 
   if (doclet.alias === '{@thisClass}') {
-    memberofName = parser.resolveThis(astNode);
+    memberofName = parser.resolveThis(node);
 
     // "class" refers to the owner of the prototype, not the prototype itself
-    if (/^(.+?)(\.prototype|#)$/.test(memberofName)) {
-      memberofName = RegExp.$1;
+    match = memberofName.match(PROTOTYPE_OWNER_REGEXP);
+    if (match) {
+      memberofName = match[1];
     }
     doclet.alias = memberofName;
   }
@@ -187,8 +225,13 @@ function processAlias(parser, doclet, astNode) {
   doclet.postProcess();
 }
 
+function isModuleObject(doclet) {
+  return doclet.name === LONGNAMES.MODULE_DEFAULT_EXPORT || doclet.name === 'module.exports';
+}
+
 // TODO: separate code that resolves `this` from code that resolves the module object
-function findSymbolMemberof(parser, doclet, astNode, nameStartsWith, trailingPunc) {
+function findSymbolMemberof(parser, doclet, node, nameStartsWith, trailingPunc) {
+  const docletIsModuleObject = isModuleObject(doclet);
   let memberof = '';
   let nameAndPunc;
   let scopePunc = '';
@@ -201,9 +244,9 @@ function findSymbolMemberof(parser, doclet, astNode, nameStartsWith, trailingPun
 
   nameAndPunc = nameStartsWith + (trailingPunc || '');
 
-  // remove stuff that indicates module membership (but don't touch the name `module.exports`,
-  // which identifies the module object itself)
-  if (doclet.name !== 'module.exports') {
+  // Remove parts of the name that indicate module membership. Don't touch the name if it identifies
+  // the module object itself.
+  if (!docletIsModuleObject) {
     doclet.name = doclet.name.replace(nameAndPunc, '');
   }
 
@@ -211,16 +254,16 @@ function findSymbolMemberof(parser, doclet, astNode, nameStartsWith, trailingPun
   //   exports.bar = 1;
   //   module.exports.bar = 1;
   //   module.exports = MyModuleObject; MyModuleObject.bar = 1;
-  if (nameStartsWith !== 'this' && currentModule && doclet.name !== 'module.exports') {
+  if (nameStartsWith !== 'this' && currentModule && !docletIsModuleObject) {
     memberof = currentModule.longname;
     scopePunc = SCOPE.PUNC.STATIC;
   }
   // like: module.exports = 1;
-  else if (doclet.name === 'module.exports' && currentModule) {
+  else if (docletIsModuleObject && currentModule) {
     doclet.addTag('name', currentModule.longname);
     doclet.postProcess();
   } else {
-    memberof = parser.resolveThis(astNode);
+    memberof = parser.resolveThis(node);
 
     // like the following at the top level of a module:
     //   this.foo = 1;
@@ -238,7 +281,7 @@ function findSymbolMemberof(parser, doclet, astNode, nameStartsWith, trailingPun
   };
 }
 
-function addSymbolMemberof(parser, doclet, astNode) {
+function addSymbolMemberof(parser, doclet, node) {
   let basename;
   let memberof;
   let memberofInfo;
@@ -247,7 +290,7 @@ function addSymbolMemberof(parser, doclet, astNode) {
   let scopePunc;
   let unresolved;
 
-  if (!astNode) {
+  if (!node) {
     return;
   }
 
@@ -256,11 +299,13 @@ function addSymbolMemberof(parser, doclet, astNode) {
   if (currentModule) {
     moduleOriginalName = `|${currentModule.originalName}`;
   }
-  resolveTargetRegExp = new RegExp(`^((?:module.)?exports|this${moduleOriginalName})(\\.|\\[|$)`);
+  resolveTargetRegExp = new RegExp(
+    `^((?:module\\.)?exports|${ESCAPED_MODULE_LONGNAMES}|this${moduleOriginalName})(\\.|\\[|$)`
+  );
   unresolved = resolveTargetRegExp.exec(doclet.name);
 
   if (unresolved) {
-    memberofInfo = findSymbolMemberof(parser, doclet, astNode, unresolved[1], unresolved[2]);
+    memberofInfo = findSymbolMemberof(parser, doclet, node, unresolved[1], unresolved[2]);
     memberof = memberofInfo.memberof;
     scopePunc = memberofInfo.scopePunc;
 
@@ -268,7 +313,7 @@ function addSymbolMemberof(parser, doclet, astNode) {
       doclet.name = doclet.name ? memberof + scopePunc + doclet.name : memberof;
     }
   } else {
-    memberofInfo = parser.astnodeToMemberof(astNode);
+    memberofInfo = parser.astnodeToMemberof(node);
     basename = memberofInfo.basename;
     memberof = memberofInfo.memberof;
   }
@@ -287,14 +332,14 @@ function addSymbolMemberof(parser, doclet, astNode) {
 }
 
 function newSymbolDoclet(parser, docletSrc, e) {
-  const newDoclet = createSymbolDoclet(docletSrc, e, parser.dependencies);
+  const newDoclet = createSymbolDoclet(docletSrc, e, parser.env);
 
   // if there's an alias, use that as the symbol name
   if (newDoclet.alias) {
     processAlias(parser, newDoclet, e.astnode);
   }
   // otherwise, get the symbol name from the code
-  else if (e.code && typeof e.code.name !== 'undefined' && e.code.name !== '') {
+  else if (typeof e.code?.name !== 'undefined' && e.code?.name !== '') {
     newDoclet.addTag('name', e.code.name);
     if (!newDoclet.memberof) {
       addSymbolMemberof(parser, newDoclet, e.astnode);
@@ -305,14 +350,15 @@ function newSymbolDoclet(parser, docletSrc, e) {
     return false;
   }
 
-  // set the scope to global unless any of the following are true:
-  // a) the doclet is a memberof something
-  // b) the doclet represents a module
-  // c) we're in a module that exports only this symbol
+  // Set the scope to `global` unless any of the following are true:
+  //
+  // + The doclet is a `memberof` something.
+  // + The doclet represents a module.
+  // + We're in a CommonJS module that exports only this symbol.
   if (
     !newDoclet.memberof &&
     newDoclet.kind !== 'module' &&
-    (!currentModule || currentModule.longname !== newDoclet.name)
+    (!currentModule || !isModuleExports(currentModule, newDoclet))
   ) {
     newDoclet.scope = SCOPE.NAMES.GLOBAL;
   }
@@ -341,7 +387,7 @@ export function attachTo(parser) {
     let newDoclet;
 
     for (let i = 0, l = comments.length; i < l; i++) {
-      newDoclet = createDoclet(comments[i], e, parser.dependencies);
+      newDoclet = createDoclet(comments[i], e, parser.env);
 
       // we're only interested in virtual comments here
       if (!newDoclet.name) {
@@ -372,5 +418,6 @@ export function attachTo(parser) {
 
   parser.on('fileComplete', () => {
     currentModule = null;
+    inferredModules = [];
   });
 }

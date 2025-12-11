@@ -13,14 +13,8 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
-import { log } from '@jsdoc/util';
-import stripBom from 'strip-bom';
 
-/**
- * Provides access to information about a JavaScript package.
- *
- * @see https://www.npmjs.org/doc/files/package.json.html
- */
+import stripBom from 'strip-bom';
 
 // Collect all of the license information from a `package.json` file.
 function getLicenses(packageInfo) {
@@ -75,12 +69,18 @@ function getLicenses(packageInfo) {
  * **Note**: JSDoc does not validate or normalize the contents of `package.json` files. If your
  * `package.json` file does not follow the npm specification, some properties of the `Package`
  * object may not use the format documented here.
+ *
+ * @alias module:@jsdoc/doclet.Package
  */
 export class Package {
   /**
+   * Creates an object that represents a package.
+   *
    * @param {string} json - The contents of the `package.json` file.
+   * @param {Object} env - The JSDoc environment.
    */
-  constructor(json) {
+  constructor(json, env) {
+    const log = env.log;
     let packageInfo;
 
     /**
@@ -140,7 +140,7 @@ export class Package {
       /**
        * The contributors to this package.
        *
-       * @type {Array.<(module:@jsdoc/doclet.Package~PersonInfo|string)>}
+       * @type {Array<(module:@jsdoc/doclet.Package~PersonInfo|string)>}
        */
       this.contributors = packageInfo.contributors;
     }
@@ -193,7 +193,7 @@ export class Package {
      * After JSDoc parses your input files, it sets this property to a list of paths to your input
      * files.
      *
-     * @type {Array.<string>}
+     * @type {Array<string>}
      */
     this.files = [];
 
@@ -210,7 +210,7 @@ export class Package {
       /**
        * Keywords to help users find the package.
        *
-       * @type {Array.<string>}
+       * @type {Array<string>}
        */
       this.keywords = packageInfo.keywords;
     }
@@ -220,7 +220,7 @@ export class Package {
        * The licenses used by this package. Combines information from the `package.json` file's
        * `license` property and the deprecated `licenses` property.
        *
-       * @type {Array.<module:@jsdoc/doclet.Package~LicenseInfo>}
+       * @type {Array<module:@jsdoc/doclet.Package~LicenseInfo>}
        */
       this.licenses = getLicenses(packageInfo);
     }
@@ -254,5 +254,13 @@ export class Package {
        */
       this.version = packageInfo.version;
     }
+  }
+
+  isGlobal() {
+    return false;
+  }
+
+  isVisible() {
+    return this.kind === 'package' && this.longname && this.longname !== 'package:undefined';
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "@jsdoc/core",
-  "version": "0.5.1",
+  "version": "0.5.10",
   "description": "Core functionality for JSDoc.",
   "keywords": [
     "jsdoc"
@@ -31,15 +31,17 @@
     }
   },
   "dependencies": {
-    "bottlejs": "^2.0.1",
-    "cosmiconfig": "^8.1.3",
-    "escape-string-regexp": "^5.0.0",
+    "@jsdoc/doclet": "^0.2.13",
+    "@jsdoc/parse": "^0.3.13",
+    "@jsdoc/tag": "^0.2.13",
+    "cosmiconfig": "^9.0.0",
+    "fast-glob": "^3.3.3",
     "lodash": "^4.17.21",
     "strip-bom": "^5.0.0",
-    "strip-json-comments": "^5.0.0"
+    "strip-json-comments": "^5.0.3"
   },
   "engines": {
-    "node": ">=v18.12.0"
+    "node": "^20.19.0 || ^22.12.0 || >=23.0.0"
   },
   "gitHead": "a595f7f2a525f32da9a0498a027667af3d938158"
 }

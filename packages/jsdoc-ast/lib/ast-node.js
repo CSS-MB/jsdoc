@@ -13,17 +13,24 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
+
 // TODO: docs
-import { name } from '@jsdoc/core';
+import * as name from '@jsdoc/name';
 import { cast } from '@jsdoc/util';
-import _ from 'lodash';
+import moduleTypes from 'ast-module-types';
 
 import { Syntax } from './syntax.js';
 
-const { SCOPE } = name;
+const { LONGNAMES, SCOPE } = name;
 
 // Counter for generating unique node IDs.
 let uid = 100000000;
+
+export const MODULE_TYPES = {
+  AMD: 'amd',
+  COMMON_JS: 'commonjs',
+  ES6: 'es6',
+};
 
 /**
  * Check whether an AST node represents a function.
@@ -72,54 +79,38 @@ export function isScope(node) {
 
 // TODO: docs
 export function addNodeProperties(node) {
-  const newProperties = {};
-
-  if (!node || typeof node !== 'object') {
+  if (!node) {
     return null;
   }
 
-  if (!node.nodeId) {
-    newProperties.nodeId = {
-      value: `astnode${uid++}`,
-      enumerable: true,
-    };
-  }
-
-  if (_.isUndefined(node.parent)) {
-    newProperties.parent = {
-      // `null` means 'no parent', so use `undefined` for now
+  Object.defineProperties(node, {
+    enclosingScope: {
+      // `null` means 'no enclosing scope', so use `undefined` for now.
       value: undefined,
       writable: true,
-    };
-  }
-
-  if (_.isUndefined(node.enclosingScope)) {
-    newProperties.enclosingScope = {
-      // `null` means 'no enclosing scope', so use `undefined` for now
-      value: undefined,
-      writable: true,
-    };
-  }
-
-  if (_.isUndefined(node.parentId)) {
-    newProperties.parentId = {
-      enumerable: true,
-      get() {
-        return this.parent ? this.parent.nodeId : null;
-      },
-    };
-  }
-
-  if (_.isUndefined(node.enclosingScopeId)) {
-    newProperties.enclosingScopeId = {
+    },
+    enclosingScopeId: {
       enumerable: true,
       get() {
         return this.enclosingScope ? this.enclosingScope.nodeId : null;
       },
-    };
-  }
-
-  Object.defineProperties(node, newProperties);
+    },
+    nodeId: {
+      value: `astnode${uid++}`,
+      enumerable: true,
+    },
+    parent: {
+      // `null` means 'no parent', so use `undefined` for now.
+      value: undefined,
+      writable: true,
+    },
+    parentId: {
+      enumerable: true,
+      get() {
+        return this.parent ? this.parent.nodeId : null;
+      },
+    },
+  });
 
   return node;
 }
@@ -163,13 +154,7 @@ export function nodeToValue(node) {
       break;
 
     case Syntax.ClassPrivateProperty:
-      // TODO: Strictly speaking, the name should be '#' plus node.key, but because we
-      // already use '#' as scope punctuation, that causes JSDoc to get extremely confused.
-      // The solution probably involves quoting part or all of the name, but JSDoc doesn't
-      // deal with quoted names very nicely right now, and most people probably won't want to
-      // document class private properties anyhow. So for now, we'll just cheat and omit the
-      // leading '#'.
-      str = nodeToValue(node.key.id);
+      str = SCOPE.PUNC.INSTANCE + nodeToValue(node.key.id);
       break;
 
     case Syntax.ClassProperty:
@@ -180,25 +165,24 @@ export function nodeToValue(node) {
     // falls through
 
     case Syntax.ExportDefaultDeclaration:
-      str = 'module.exports';
+      str = LONGNAMES.MODULE_DEFAULT_EXPORT;
       break;
 
     case Syntax.ExportNamedDeclaration:
       if (node.declaration) {
-        // like `var` in: export var foo = 'bar';
-        // we need a single value, so we use the first variable name
+        // Like the declaration in: `export const foo = 'bar';`
+        // We need a single value, so we use the first variable name.
         if (node.declaration.declarations) {
-          str = `exports.${nodeToValue(node.declaration.declarations[0])}`;
+          str = `${nodeToValue(node.declaration.declarations[0])}`;
         } else {
-          str = `exports.${nodeToValue(node.declaration)}`;
+          str = `${nodeToValue(node.declaration)}`;
         }
       }
 
-      // otherwise we'll use the ExportSpecifier nodes
       break;
 
     case Syntax.ExportSpecifier:
-      str = `exports.${nodeToValue(node.exported)}`;
+      str = `${LONGNAMES.MODULE_EXPORT}.${nodeToValue(node.exported)}`;
       break;
 
     case Syntax.ArrowFunctionExpression:
@@ -246,7 +230,7 @@ export function nodeToValue(node) {
         parent.parent &&
         parent.parent.type === Syntax.ExportDefaultDeclaration
       ) {
-        str = 'module.exports';
+        str = LONGNAMES.MODULE_DEFAULT_EXPORT;
       }
       // for the constructor of a module's named export, use the name of the export
       // declaration
@@ -299,6 +283,10 @@ export function nodeToValue(node) {
       });
 
       str = JSON.stringify(tempObject);
+      break;
+
+    case Syntax.PrivateName:
+      str = SCOPE.PUNC.INSTANCE + nodeToValue(node.id);
       break;
 
     case Syntax.RestElement:
@@ -409,7 +397,7 @@ export function getInfo(node) {
       info.node = node;
       // if this class is the default export, we need to use a special name
       if (node.parent && node.parent.type === Syntax.ExportDefaultDeclaration) {
-        info.name = 'module.exports';
+        info.name = LONGNAMES.MODULE_DEFAULT_EXPORT;
       } else {
         info.name = node.id ? nodeToValue(node.id) : '';
       }
@@ -582,4 +570,23 @@ export function getInfo(node) {
   }
 
   return info;
+}
+
+export function detectModuleType(node) {
+  if (moduleTypes.isES6Export(node) || moduleTypes.isES6Import(node)) {
+    return MODULE_TYPES.ES6;
+  }
+
+  if (moduleTypes.isDefineAMD(node) || moduleTypes.isAMDDriverScriptRequire(node)) {
+    return MODULE_TYPES.AMD;
+  }
+
+  if (
+    moduleTypes.isExports(node) ||
+    (moduleTypes.isRequire(node) && !moduleTypes.isDefineAMD(node))
+  ) {
+    return MODULE_TYPES.COMMON_JS;
+  }
+
+  return null;
 }

@@ -13,24 +13,27 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
+
 /**
  * Functions that resolve `@borrows` tags in JSDoc comments.
  */
-import { name } from '@jsdoc/core';
-import _ from 'lodash';
 
-const { SCOPE } = name;
+import { SCOPE } from '@jsdoc/name';
 
-function cloneBorrowedDoclets({ borrowed, longname }, doclets) {
-  borrowed.forEach(({ from, as }) => {
-    const borrowedDoclets = doclets.index.longname[from];
+import { Doclet } from './doclet.js';
+
+function cloneBorrowedDoclets({ borrowed, longname }, docletStore) {
+  borrowed?.forEach(({ from, as }) => {
+    const borrowedDoclets = docletStore.docletsByLongname.get(from);
     let borrowedAs = as || from;
     let parts;
     let scopePunc;
 
     if (borrowedDoclets) {
       borrowedAs = borrowedAs.replace(/^prototype\./, SCOPE.PUNC.INSTANCE);
-      _.cloneDeep(borrowedDoclets).forEach((clone) => {
+      borrowedDoclets.forEach((borrowedDoclet) => {
+        const clone = Doclet.clone(borrowedDoclet);
+
         // TODO: this will fail on longnames like '"Foo#bar".baz'
         parts = borrowedAs.split(SCOPE.PUNC.INSTANCE);
 
@@ -45,23 +48,26 @@ function cloneBorrowedDoclets({ borrowed, longname }, doclets) {
         clone.name = parts.pop();
         clone.memberof = longname;
         clone.longname = clone.memberof + scopePunc + clone.name;
-        doclets.push(clone);
+        docletStore.add(clone);
       });
     }
   });
 }
 
 /**
-  Take a copy of the docs for borrowed symbols and attach them to the
-  docs for the borrowing symbol. This process changes the symbols involved,
-  moving docs from the "borrowed" array and into the general docs, then
-  deleting the "borrowed" array.
+ * Creates doclets for borrowed symbols, and adds them to the doclet store.
+ *
+ * The `name`, `memberof`, and `longname` properties for the new doclets are rewritten to show that
+ * they belong to the borrowing symbol.
+ *
+ * This method also removes the `borrowed` property from each borrowed doclet.
+ *
+ * @alias module:@jsdoc/doclet.resolveBorrows
+ * @param {!module:@jsdoc/doclet.DocletStore} docletStore - The doclet store to update.
  */
-export function resolveBorrows(doclets) {
-  for (let doclet of doclets.index.borrowed) {
-    cloneBorrowedDoclets(doclet, doclets);
-    delete doclet.borrowed;
+export function resolveBorrows(docletStore) {
+  for (const doclet of docletStore.docletsWithBorrowed) {
+    cloneBorrowedDoclets(doclet, docletStore);
+    doclet.borrowed = undefined;
   }
-
-  doclets.index.borrowed = [];
 }

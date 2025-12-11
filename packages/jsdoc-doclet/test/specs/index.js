@@ -13,10 +13,12 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
+
 import doclet from '../../index.js';
 import * as augment from '../../lib/augment.js';
 import { resolveBorrows } from '../../lib/borrow.js';
-import { combineDoclets, Doclet } from '../../lib/doclet.js';
+import { Doclet } from '../../lib/doclet.js';
+import { DocletStore } from '../../lib/doclet-store.js';
 import { Package } from '../../lib/package.js';
 import * as schema from '../../lib/schema.js';
 
@@ -31,15 +33,15 @@ describe('@jsdoc/doclet', () => {
     });
   });
 
-  describe('combineDoclets', () => {
-    it('is lib/doclet.combineDoclets', () => {
-      expect(doclet.combineDoclets).toEqual(combineDoclets);
-    });
-  });
-
   describe('Doclet', () => {
     it('is lib/doclet.Doclet', () => {
       expect(doclet.Doclet).toEqual(Doclet);
+    });
+  });
+
+  describe('DocletStore', () => {
+    it('is lib/doclet.DocletStore', () => {
+      expect(doclet.DocletStore).toEqual(DocletStore);
     });
   });
 

@@ -13,30 +13,32 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
+
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import salty from '@jsdoc/salty';
-import { fs as jsdocFs, log } from '@jsdoc/util';
 import commonPathPrefix from 'common-path-prefix';
-import fastGlob from 'fast-glob';
+import glob from 'fast-glob';
 import _ from 'lodash';
 
 import { Template } from './lib/template.js';
 import * as helper from './lib/templateHelper.js';
 
 const { htmlsafe, linkto, resolveAuthorLinks } = helper;
-const { lsSync } = jsdocFs;
-const { sync: glob } = fastGlob;
 const { resolve } = createRequire(import.meta.url);
 const { taffy } = salty;
 
-const FONT_CSS_FILES = ['variable.css', 'variable-italic.css'];
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+const FONT_CSS_FILES = ['standard.css', 'standard-italic.css'];
 const PRETTIFIER_CSS_FILES = ['tomorrow.min.css'];
 const PRETTIFIER_SCRIPT_FILES = ['lang-css.js', 'prettify.js'];
 
 let data;
+let log;
 let view;
 
 function mkdirpSync(filepath) {
@@ -51,14 +53,14 @@ function getAncestorLinks(doclet) {
   return helper.getAncestorLinks(data, doclet);
 }
 
-function hashToLink(doclet, hash, dependencies) {
+function hashToLink(doclet, hash, env) {
   let url;
 
   if (!/^(#.+)/.test(hash)) {
     return hash;
   }
 
-  url = helper.createLink(doclet, dependencies);
+  url = helper.createLink(doclet, env);
   url = url.replace(/(#.+|$)/, hash);
 
   return `<a href="${url}">${hash}</a>`;
@@ -72,7 +74,7 @@ function needsSignature({ kind, type, meta }) {
     needsSig = true;
   }
   // typedefs that contain functions get a signature, too
-  else if (kind === 'typedef' && type && type.names && type.names.length) {
+  else if (kind === 'typedef' && type?.names?.length) {
     for (let i = 0, l = type.names.length; i < l; i++) {
       if (type.names[i].toLowerCase() === 'function') {
         needsSig = true;
@@ -82,13 +84,7 @@ function needsSignature({ kind, type, meta }) {
   }
   // and namespaces that are functions get a signature (but finding them is a
   // bit messy)
-  else if (
-    kind === 'namespace' &&
-    meta &&
-    meta.code &&
-    meta.code.type &&
-    meta.code.type.match(/[Ff]unction/)
-  ) {
+  else if (kind === 'namespace' && meta?.code?.type?.match(/[Ff]unction/)) {
     needsSig = true;
   }
 
@@ -236,9 +232,8 @@ function getPathFromDoclet({ meta }) {
   return meta.path && meta.path !== 'null' ? path.join(meta.path, meta.filename) : meta.filename;
 }
 
-function generate(title, docs, filename, resolveLinks, outdir, dependencies) {
+function generate(title, docs, filename, resolveLinks, outdir, env) {
   let docData;
-  const env = dependencies.get('env');
   let html;
   let outpath;
 
@@ -254,19 +249,19 @@ function generate(title, docs, filename, resolveLinks, outdir, dependencies) {
   html = view.render('container.tmpl', docData);
 
   if (resolveLinks) {
-    html = helper.resolveLinks(html, dependencies); // turn {@link foo} into <a href="foodoc.html">foo</a>
+    html = helper.resolveLinks(html, env); // turn {@link foo} into <a href="foodoc.html">foo</a>
   }
 
   fs.writeFileSync(outpath, html, 'utf8');
 }
 
-function generateSourceFiles(sourceFiles, encoding, outdir, dependencies) {
+function generateSourceFiles(sourceFiles, encoding, outdir, env) {
   encoding = encoding || 'utf8';
 
   Object.keys(sourceFiles).forEach((file) => {
     let source;
     // links are keyed to the shortened path in each doclet's `meta.shortpath` property
-    const sourceOutfile = helper.getUniqueFilename(sourceFiles[file].shortened, dependencies);
+    const sourceOutfile = helper.getUniqueFilename(sourceFiles[file].shortened, env);
 
     helper.registerLink(sourceFiles[file].shortened, sourceOutfile);
 
@@ -279,14 +274,7 @@ function generateSourceFiles(sourceFiles, encoding, outdir, dependencies) {
       log.error(`Error while generating source file ${file}: ${e.message}`);
     }
 
-    generate(
-      `Source: ${sourceFiles[file].shortened}`,
-      [source],
-      sourceOutfile,
-      false,
-      outdir,
-      dependencies
-    );
+    generate(`Source: ${sourceFiles[file].shortened}`, [source], sourceOutfile, false, outdir, env);
   });
 }
 
@@ -329,8 +317,7 @@ function attachModuleSymbols(doclets, modules) {
   });
 }
 
-function buildMemberNav(items, itemHeading, itemsSeen, linktoFn, dependencies) {
-  const config = dependencies.get('config');
+function buildMemberNav(items, itemHeading, itemsSeen, linktoFn, { config }) {
   let nav = '';
 
   if (items.length) {
@@ -381,18 +368,18 @@ function linktoExternal(longName, name) {
  * @param {array<object>} members.interfaces
  * @return {string} The HTML for the navigation sidebar.
  */
-function buildNav(members, dependencies) {
+function buildNav(members, env) {
   let globalNav;
   let nav = '<h2><a href="index.html">Home</a></h2>';
   const seen = {};
 
-  nav += buildMemberNav(members.modules, 'Modules', {}, linkto, dependencies);
-  nav += buildMemberNav(members.externals, 'Externals', seen, linktoExternal, dependencies);
-  nav += buildMemberNav(members.namespaces, 'Namespaces', seen, linkto, dependencies);
-  nav += buildMemberNav(members.classes, 'Classes', seen, linkto, dependencies);
-  nav += buildMemberNav(members.interfaces, 'Interfaces', seen, linkto, dependencies);
-  nav += buildMemberNav(members.events, 'Events', seen, linkto, dependencies);
-  nav += buildMemberNav(members.mixins, 'Mixins', seen, linkto, dependencies);
+  nav += buildMemberNav(members.modules, 'Modules', {}, linkto, env);
+  nav += buildMemberNav(members.externals, 'Externals', seen, linktoExternal, env);
+  nav += buildMemberNav(members.namespaces, 'Namespaces', seen, linkto, env);
+  nav += buildMemberNav(members.classes, 'Classes', seen, linkto, env);
+  nav += buildMemberNav(members.interfaces, 'Interfaces', seen, linkto, env);
+  nav += buildMemberNav(members.events, 'Events', seen, linkto, env);
+  nav += buildMemberNav(members.mixins, 'Mixins', seen, linkto, env);
 
   if (members.globals.length) {
     globalNav = '';
@@ -418,14 +405,12 @@ function buildNav(members, dependencies) {
 function sourceToDestination(parentDir, sourcePath, destDir) {
   const relativeSource = path.relative(parentDir, sourcePath);
 
+  console.log(`sourcePath: ${sourcePath}\nrelativeSource: ${relativeSource}`);
+
   return path.resolve(path.join(destDir, relativeSource));
 }
 
-/**
-    @param {TAFFY} taffyData See <http://taffydb.com/>.
-    @param {object} opts
- */
-export function publish(taffyData, dependencies) {
+export function publish(docletStore, env) {
   let classes;
   let config;
   let externals;
@@ -451,21 +436,24 @@ export function publish(taffyData, dependencies) {
   let templatePath;
   let userStaticFileOutputDir;
 
-  data = taffyData;
-  opts = dependencies.get('options');
-  config = dependencies.get('config');
+  opts = env.options;
+  config = env.config;
+  log = env.log;
   templateConfig = config.templates || {};
   templateConfig.default = templateConfig.default || {};
   outdir = path.normalize(opts.destination);
-  templatePath = path.normalize(path.dirname(opts.template));
+  if (!path.isAbsolute(outdir)) {
+    outdir = path.resolve(process.cwd(), outdir);
+  }
+  templatePath = __dirname;
   view = new Template(path.join(templatePath, 'tmpl'));
 
   // claim some special filenames in advance, so the All-Powerful Overseer of Filename Uniqueness
   // doesn't try to hand them out later
-  indexUrl = helper.getUniqueFilename('index', dependencies);
+  indexUrl = helper.getUniqueFilename('index', env);
   // don't call registerLink() on this one! 'index' is also a valid longname
 
-  globalUrl = helper.getUniqueFilename('global', dependencies);
+  globalUrl = helper.getUniqueFilename('global', env);
   helper.registerLink('global', globalUrl);
 
   // set up templating
@@ -473,7 +461,7 @@ export function publish(taffyData, dependencies) {
     ? path.resolve(templateConfig.default.layoutFile)
     : 'layout.tmpl';
 
-  data = helper.prune(data, dependencies);
+  data = taffy(Array.from(docletStore.doclets));
   data.sort('longname, version, since');
   helper.addEventListeners(data);
 
@@ -486,10 +474,11 @@ export function publish(taffyData, dependencies) {
       doclet.examples = doclet.examples.map((example) => {
         let caption;
         let code;
+        const match = example.match(/^\s*<caption>([\s\S]+?)<\/caption>(\s*[\n\r])([\s\S]+)$/i);
 
-        if (example.match(/^\s*<caption>([\s\S]+?)<\/caption>(\s*[\n\r])([\s\S]+)$/i)) {
-          caption = RegExp.$1;
-          code = RegExp.$3;
+        if (match) {
+          caption = match[1];
+          code = match[3];
         }
 
         return {
@@ -500,7 +489,7 @@ export function publish(taffyData, dependencies) {
     }
     if (doclet.see) {
       doclet.see.forEach((seeItem, i) => {
-        doclet.see[i] = hashToLink(doclet, seeItem, dependencies);
+        doclet.see[i] = hashToLink(doclet, seeItem, env);
       });
     }
 
@@ -526,35 +515,40 @@ export function publish(taffyData, dependencies) {
 
   // copy the template's static files to outdir
   fromDir = path.join(templatePath, 'static');
-  staticFiles = lsSync(fromDir);
+  staticFiles = glob.sync('**/*', {
+    cwd: fromDir,
+    onlyFiles: true,
+  });
 
   staticFiles.forEach((fileName) => {
-    const toPath = sourceToDestination(fromDir, fileName, outdir);
+    const toPath = path.join(outdir, fileName);
 
     mkdirpSync(path.dirname(toPath));
-    fs.copyFileSync(fileName, toPath);
+    fs.copyFileSync(path.join(fromDir, fileName), toPath);
   });
 
   // copy the fonts used by the template to outdir
-  staticFiles = lsSync(path.join(resolve('@fontsource/open-sans'), '..', 'files'));
+  fromDir = path.join(resolve('@fontsource-variable/open-sans'), '..', 'files');
+  staticFiles = glob.sync('**/*standard-{normal,italic}*', {
+    cwd: fromDir,
+    onlyFiles: true,
+  });
 
   staticFiles.forEach((fileName) => {
     const toPath = path.join(outdir, 'fonts', path.basename(fileName));
 
-    if (path.parse(fileName).name.includes('variable-wghtOnly')) {
-      mkdirpSync(path.dirname(toPath));
-      fs.copyFileSync(fileName, toPath);
-    }
+    mkdirpSync(path.dirname(toPath));
+    fs.copyFileSync(path.join(fromDir, fileName), toPath);
   });
 
   // copy the font CSS to outdir
-  staticFiles = path.join(resolve('@fontsource/open-sans'), '..');
+  staticFiles = path.join(resolve('@fontsource-variable/open-sans'), '..');
   FONT_CSS_FILES.forEach((fileName) => {
     const fromPath = path.join(staticFiles, fileName);
-    const toPath = path.join(outdir, 'styles', fileName.replace('variable', 'open-sans'));
+    const toPath = path.join(outdir, 'styles', fileName.replace('standard', 'open-sans'));
     let source = fs.readFileSync(fromPath, 'utf8');
 
-    source = source.replace(/url\('\.\/files/g, "url('../fonts");
+    source = source.replace(/url\(\.\/files/g, 'url(../fonts');
     mkdirpSync(path.dirname(toPath));
     fs.writeFileSync(toPath, source);
   });
@@ -574,8 +568,10 @@ export function publish(taffyData, dependencies) {
       // `resolve()` has trouble with this package, so we use an extra-hacky way to
       // get the filepath.
       path.join(
-        templatePath,
-        'node_modules',
+        resolve('fast-glob'),
+        '..',
+        '..',
+        '..',
         'color-themes-for-google-code-prettify',
         'dist',
         'themes',
@@ -591,7 +587,7 @@ export function publish(taffyData, dependencies) {
     // with a bug in JSDoc 3.2.x.
     staticFilePaths =
       templateConfig.default.staticFiles.include || templateConfig.default.staticFiles.paths || [];
-    staticFilePaths = glob(staticFilePaths, {
+    staticFilePaths = glob.sync(staticFilePaths, {
       absolute: true,
       onlyFiles: true,
     });
@@ -611,7 +607,7 @@ export function publish(taffyData, dependencies) {
   }
   data().each((doclet) => {
     let docletPath;
-    const url = helper.createLink(doclet, dependencies);
+    const url = helper.createLink(doclet, env);
 
     helper.registerLink(doclet.longname, url);
 
@@ -670,16 +666,16 @@ export function publish(taffyData, dependencies) {
   view.outputSourceFiles = outputSourceFiles;
 
   // once for all
-  view.nav = buildNav(members, dependencies);
+  view.nav = buildNav(members, env);
   attachModuleSymbols(find({ longname: { left: 'module:' } }), members.modules);
 
   // generate the pretty-printed source files first so other pages can link to them
   if (outputSourceFiles) {
-    generateSourceFiles(sourceFiles, opts.encoding, outdir, dependencies);
+    generateSourceFiles(sourceFiles, opts.encoding, outdir, env);
   }
 
   if (members.globals.length) {
-    generate('Global', [{ kind: 'globalobj' }], globalUrl, true, outdir, dependencies);
+    generate('Global', [{ kind: 'globalobj' }], globalUrl, true, outdir, env);
   }
 
   // index page displays information from package.json and lists files
@@ -699,7 +695,7 @@ export function publish(taffyData, dependencies) {
     indexUrl,
     true,
     outdir,
-    dependencies
+    env
   );
 
   // set up the lists that we'll use to generate pages
@@ -725,7 +721,7 @@ export function publish(taffyData, dependencies) {
         helper.longnameToUrl[longname],
         true,
         outdir,
-        dependencies
+        env
       );
     }
 
@@ -736,7 +732,7 @@ export function publish(taffyData, dependencies) {
         helper.longnameToUrl[longname],
         true,
         outdir,
-        dependencies
+        env
       );
     }
 
@@ -747,7 +743,7 @@ export function publish(taffyData, dependencies) {
         helper.longnameToUrl[longname],
         true,
         outdir,
-        dependencies
+        env
       );
     }
 
@@ -758,7 +754,7 @@ export function publish(taffyData, dependencies) {
         helper.longnameToUrl[longname],
         true,
         outdir,
-        dependencies
+        env
       );
     }
 
@@ -769,7 +765,7 @@ export function publish(taffyData, dependencies) {
         helper.longnameToUrl[longname],
         true,
         outdir,
-        dependencies
+        env
       );
     }
 
@@ -780,7 +776,7 @@ export function publish(taffyData, dependencies) {
         helper.longnameToUrl[longname],
         true,
         outdir,
-        dependencies
+        env
       );
     }
   });

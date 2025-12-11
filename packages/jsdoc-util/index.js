@@ -13,15 +13,14 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
+
 /**
  * Utility modules for JSDoc.
  *
  * @module @jsdoc/util
  */
-import EventBus from './lib/bus.js';
 import cast from './lib/cast.js';
-import * as fs from './lib/fs.js';
-import log from './lib/log.js';
+import getLogFunctions from './lib/log.js';
 
-export { cast, EventBus, fs, log };
-export default { cast, EventBus, fs, log };
+export { cast, getLogFunctions };
+export default { cast, getLogFunctions };

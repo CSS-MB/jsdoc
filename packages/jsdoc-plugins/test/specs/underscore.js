@@ -13,7 +13,7 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
-/* global jsdoc */
+
 import path from 'node:path';
 
 import { plugins } from '@jsdoc/core';
@@ -25,7 +25,7 @@ describe('underscore plugin', () => {
   const pluginPath = path.resolve(__dirname, '../../underscore.js');
 
   beforeAll(async () => {
-    await plugins.installPlugins([pluginPath], parser, jsdoc.deps);
+    await plugins.installPlugins([pluginPath], parser, jsdoc.env);
     docSet = jsdoc.getDocSetFromFile(path.resolve(__dirname, '../fixtures/underscore.js'), parser);
   });
 

@@ -13,35 +13,29 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
+
 import core from '../../index.js';
+import Api from '../../lib/api.js';
 import * as config from '../../lib/config.js';
-import Dependencies from '../../lib/dependencies.js';
-import env from '../../lib/env.js';
-import * as name from '../../lib/name.js';
+import Env from '../../lib/env.js';
 import * as plugins from '../../lib/plugins.js';
 
 describe('@jsdoc/core', () => {
+  describe('Api', () => {
+    it('is lib/api', () => {
+      expect(core.Api).toEqual(Api);
+    });
+  });
+
   describe('config', () => {
     it('is lib/config', () => {
       expect(core.config).toEqual(config);
     });
   });
 
-  describe('Dependencies', () => {
-    it('is lib/dependencies', () => {
-      expect(core.Dependencies).toEqual(Dependencies);
-    });
-  });
-
-  describe('env', () => {
+  describe('Env', () => {
     it('is lib/env', () => {
-      expect(core.env).toEqual(env);
-    });
-  });
-
-  describe('name', () => {
-    it('is lib/name', () => {
-      expect(core.name).toEqual(name);
+      expect(core.Env).toEqual(Env);
     });
   });
 

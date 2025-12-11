@@ -13,12 +13,10 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
-import { name } from '@jsdoc/core';
-import { inline } from '@jsdoc/tag';
-import { log } from '@jsdoc/util';
-import catharsis from 'catharsis';
 
-const { longnamesToTree, SCOPE, SCOPE_TO_PUNC, toParts } = name;
+import { longnamesToTree, SCOPE, SCOPE_TO_PUNC, toParts } from '@jsdoc/name';
+import { inline } from '@jsdoc/tag';
+import catharsis from 'catharsis';
 
 const MODULE_NAMESPACE = 'module:';
 
@@ -61,8 +59,8 @@ function getNamespace(kind, dictionary) {
   return '';
 }
 
-function formatNameForLink(doclet, dependencies) {
-  const dictionary = dependencies.get('tags');
+function formatNameForLink(doclet, env) {
+  const dictionary = env.tags;
   let newName =
     getNamespace(doclet.kind, dictionary) + (doclet.name || '') + (doclet.variation || '');
   const scopePunc = SCOPE_TO_PUNC[doclet.scope] || '';
@@ -113,11 +111,11 @@ function makeUniqueFilename(filename, str) {
  *
  * @function
  * @param {string} str The string to convert.
- * @param {Object} dependencies The JSDoc dependency container.
+ * @param {Object} env The JSDoc environment.
  * @return {string} The filename to use for the string.
  */
-export function getUniqueFilename(str, dependencies) {
-  const dictionary = dependencies.get('tags');
+export function getUniqueFilename(str, env) {
+  const dictionary = env.tags;
   const namespaces = dictionary.getNamespaces().join('|');
   let basename = (str || '')
     // use - instead of : in namespace prefixes
@@ -146,13 +144,13 @@ export function getUniqueFilename(str, dependencies) {
  * register the filename.
  * @private
  */
-function getFilename(longname, dependencies) {
+function getFilename(longname, env) {
   let fileUrl;
 
   if (Object.hasOwn(longnameToUrl, longname)) {
     fileUrl = longnameToUrl[longname];
   } else {
-    fileUrl = getUniqueFilename(longname, dependencies);
+    fileUrl = getUniqueFilename(longname, env);
     registerLink(longname, fileUrl);
   }
 
@@ -246,19 +244,21 @@ function parseType(longname) {
   let err;
 
   try {
-    return catharsis.parse(longname, { jsdoc: true });
+    return catharsis.parse(longname, { jsdoc: true, useCache: false });
   } catch (e) {
     err = new Error(`unable to parse ${longname}: ${e.message}`);
-    log.error(err);
+    console.error(err);
 
     return longname;
   }
 }
 
-function stringifyType(parsedType, cssClass, stringifyLinkMap) {
+function stringifyType(typeExpression, cssClass, stringifyLinkMap) {
+  const parsedType = parseType(typeExpression);
+
   return catharsis.stringify(parsedType, {
-    cssClass: cssClass,
     htmlSafe: true,
+    linkClass: cssClass,
     links: stringifyLinkMap,
   });
 }
@@ -317,8 +317,6 @@ function buildLink(longname, linkText, options) {
   let stripped;
   let text;
 
-  let parsedType;
-
   // handle cases like:
   // @see <http://example.org>
   // @see http://example.org
@@ -335,9 +333,7 @@ function buildLink(longname, linkText, options) {
     /\{@.+\}/.test(longname) === false &&
     /^<[\s\S]+>/.test(longname) === false
   ) {
-    parsedType = parseType(longname);
-
-    return stringifyType(parsedType, options.cssClass, options.linkMap);
+    return stringifyType(longname, options.cssClass, options.linkMap);
   } else {
     fileUrl = Object.hasOwn(options.linkMap, longname) ? options.linkMap[longname] : '';
     text = linkText || (options.shortenName ? getShortName(longname) : longname);
@@ -380,9 +376,9 @@ export function linkto(longname, linkText, cssClass, fragmentId) {
   });
 }
 
-function useMonospace(tag, text, dependencies) {
+function useMonospace(tag, text, env) {
   let cleverLinks;
-  const config = dependencies.get('config');
+  const config = env.config;
   let monospaceLinks;
   let result;
 
@@ -435,8 +431,8 @@ function splitLinkText(text) {
   };
 }
 
-function shouldShortenLongname(dependencies) {
-  const config = dependencies.get('config');
+function shouldShortenLongname(env) {
+  const config = env.config;
 
   if (config && config.templates && config.templates.useShortNamesInLinks) {
     return true;
@@ -449,10 +445,10 @@ function shouldShortenLongname(dependencies) {
  * Find `{@link ...}` inline tags and turn them into HTML links.
  *
  * @param {string} str - The string to search for `{@link ...}` tags.
- * @param {object} dependencies - The JSDoc dependencies container.
+ * @param {object} env - The JSDoc environment.
  * @return {string} The linkified text.
  */
-export function resolveLinks(str, dependencies) {
+export function resolveLinks(str, env) {
   let replacers;
 
   function extractLeadingText(string, completeTag) {
@@ -491,14 +487,14 @@ export function resolveLinks(str, dependencies) {
     target = split.target;
     linkText = linkText || split.linkText;
 
-    monospace = useMonospace(tag, text, dependencies);
+    monospace = useMonospace(tag, text, env);
 
     return string.replace(
       completeTag,
       buildLink(target, linkText, {
         linkMap: longnameToUrl,
         monospace: monospace,
-        shortenName: shouldShortenLongname(dependencies),
+        shortenName: shouldShortenLongname(env),
       })
     );
   }
@@ -569,7 +565,7 @@ export function getMembers(data) {
     externals: find(data, { kind: 'external' }),
     events: find(data, { kind: 'event' }),
     globals: find(data, {
-      kind: ['member', 'function', 'constant', 'typedef'],
+      kind: ['enum', 'member', 'function', 'constant', 'typedef'],
       memberof: { isUndefined: true },
     }),
     mixins: find(data, { kind: 'mixin' }),
@@ -724,6 +720,26 @@ export function getSignatureReturns({ yields, returns }, cssClass) {
   return returnTypes;
 }
 
+// Cache for memberof index to speed up ancestor lookups
+let memberofIndex = null;
+
+function buildMemberofIndex(data) {
+  if (memberofIndex) {
+    return memberofIndex;
+  }
+
+  memberofIndex = new Map();
+  const allDoclets = data().get();
+
+  for (const doclet of allDoclets) {
+    if (doclet.longname) {
+      memberofIndex.set(doclet.longname, doclet);
+    }
+  }
+
+  return memberofIndex;
+}
+
 /**
  * Retrieve an ordered list of doclets for a symbol's ancestors.
  *
@@ -737,9 +753,13 @@ export function getAncestors(data, doclet) {
   let doc = doclet;
   let previousDoc;
 
+  // Build index once for all lookups
+  const index = buildMemberofIndex(data);
+
   while (doc) {
     previousDoc = doc;
-    doc = find(data, { longname: doc.memberof })[0];
+    // Use index instead of database query
+    doc = index.get(doc.memberof);
 
     // prevent infinite loop that can be caused by duplicated module definitions
     if (previousDoc === doc) {
@@ -833,11 +853,11 @@ export function addEventListeners(data) {
  * + Members tagged `@private`, unless the `private` option is enabled.
  * + Members tagged with anything other than specified by the `access` options.
  * @param {TAFFY} data The TaffyDB database to prune.
- * @param {object} dependencies The JSDoc dependencies container.
+ * @param {object} env The JSDoc environment.
  * @return {TAFFY} The pruned database.
  */
-export function prune(data, dependencies) {
-  const options = dependencies.get('options');
+export function prune(data, env) {
+  const options = env.options;
 
   data({ undocumented: true }).remove();
   data({ ignore: true }).remove();
@@ -877,10 +897,10 @@ export function prune(data, dependencies) {
  * represents a method), the URL will consist of a filename and a fragment ID.
  *
  * @param {module:@jsdoc/doclet.Doclet} doclet - The doclet that will be used to create the URL.
- * @param {Object} dependencies - The JSDoc dependency container.
+ * @param {Object} env - The JSDoc environment.
  * @return {string} The URL to the generated documentation for the doclet.
  */
-export function createLink(doclet, dependencies) {
+export function createLink(doclet, env) {
   let fakeContainer;
   let filename;
   let fileUrl;
@@ -901,21 +921,21 @@ export function createLink(doclet, dependencies) {
 
   // the doclet gets its own HTML file
   if (containers.includes(doclet.kind) || isModuleExports(doclet)) {
-    filename = getFilename(longname, dependencies);
+    filename = getFilename(longname, env);
   }
   // mistagged version of a doclet that gets its own HTML file
   else if (!containers.includes(doclet.kind) && fakeContainer) {
-    filename = getFilename(doclet.memberof || longname, dependencies);
+    filename = getFilename(doclet.memberof || longname, env);
     if (doclet.name !== doclet.longname) {
-      fragment = formatNameForLink(doclet, dependencies);
+      fragment = formatNameForLink(doclet, env);
       fragment = getId(longname, fragment);
     }
   }
   // the doclet is within another HTML file
   else {
-    filename = getFilename(doclet.memberof || globalName, dependencies);
+    filename = getFilename(doclet.memberof || globalName, env);
     if (doclet.name !== doclet.longname || doclet.scope === SCOPE.NAMES.GLOBAL) {
-      fragment = formatNameForLink(doclet, dependencies);
+      fragment = formatNameForLink(doclet, env);
       fragment = getId(longname, fragment);
     }
   }
@@ -930,7 +950,7 @@ export function createLink(doclet, dependencies) {
  * tree.
  *
  * @function
- * @see module:@jsdoc/core.name.longnamesToTree
+ * @see module:@jsdoc/name.longnamesToTree
  * @param {Array<string>} longnames - The longnames to convert into a tree.
  * @param {Object<string, module:@jsdoc/doclet.Doclet>} doclets - The doclets to attach to a tree.
  * Each property should be the longname of a doclet, and each value should be the doclet for that

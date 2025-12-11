@@ -13,9 +13,10 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
+
 import ow from 'ow';
 
-import flags from '../../../lib/flags.js';
+import { flags, parseFlags } from '../../../lib/flags.js';
 
 function validate(name, opts) {
   name = `--${name}`;
@@ -44,13 +45,22 @@ function validate(name, opts) {
 }
 
 describe('@jsdoc/cli/lib/flags', () => {
-  it('is an object', () => {
-    expect(flags).toBeObject();
-  });
+  describe('`flags`', () => {
+    it('is an object', () => {
+      expect(flags).toBeObject();
+    });
 
-  it('has reasonable settings for each flag', () => {
-    for (let flag of Object.keys(flags)) {
-      expect(() => validate(flag, flags[flag])).not.toThrow();
-    }
+    it('has reasonable settings for each flag', () => {
+      for (let flag of Object.keys(flags)) {
+        expect(() => validate(flag, flags[flag])).not.toThrow();
+      }
+    });
+  });
+  describe('`parseFlags`', () => {
+    // The tests for `Engine#parseFlags` also test this method.
+
+    it('is a function', () => {
+      expect(parseFlags).toBeFunction();
+    });
   });
 });

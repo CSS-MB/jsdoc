@@ -11,20 +11,28 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 name: build
 on: [push, pull_request]
+permissions: {}
+env:
+  # Don't install Git hooks.
+  HUSKY: 0
 jobs:
   license-check:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest]
-        node: [18]
+        node: ['20']
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node }}
+          cache: 'npm'
       - name: Check licensing
         run: |
           npm install
@@ -34,12 +42,15 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-        node: [18]
+        node: ['20']
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node }}
+          cache: 'npm'
       - name: Lint
         run: |
           npm install
@@ -49,16 +60,16 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-        node: [16, 18]
+        node: ['20.19.0', '22.12.0', '24']
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node }}
+          cache: 'npm'
       - name: Test
         run: |
-          npm install -g npm
-          npm install -g lerna
           npm install
-          lerna bootstrap
           npm run test

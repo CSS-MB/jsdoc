@@ -13,15 +13,16 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
+
 import path from 'node:path';
 
 import { execa } from 'execa';
 import { task } from 'hereby';
 import { LicenseChecker } from 'js-green-licenses';
 
+import runTests from './packages/jsdoc/test/index.js';
+
 const BIN_DIR = 'node_modules/.bin';
-const JSDOC_BIN = 'packages/jsdoc/jsdoc.js';
-const NODE_BIN = process.execPath;
 
 const sourceGlob = ['*.cjs', '*.js', 'packages/**/*/*.cjs', 'packages/**/*.js'];
 
@@ -39,6 +40,26 @@ export const coverage = task({
       bin('hereby'),
       'test',
     ]);
+  },
+});
+
+export const dependencyCleanup = task({
+  name: 'dependency-cleanup',
+  run: async () => {
+    await execa(bin('knip'), [], {
+      stdout: 'inherit',
+      stderr: 'inherit',
+    });
+  },
+});
+
+export const dependencyEngines = task({
+  name: 'dependency-engines',
+  run: async () => {
+    await execa(bin('installed-check'), ['--no-include-workspace-root'], {
+      stdout: 'inherit',
+      stderr: 'inherit',
+    });
   },
 });
 
@@ -78,6 +99,11 @@ export const dependencyLicenses = task({
   },
 });
 
+export const dependencies = task({
+  name: 'dependencies',
+  dependencies: [dependencyCleanup, dependencyEngines, dependencyLicenses],
+});
+
 export const format = task({
   name: 'format',
   run: async () => {
@@ -107,7 +133,7 @@ export const lint = task({
 export const test = task({
   name: 'test',
   run: async () => {
-    await execa(NODE_BIN, [JSDOC_BIN, '-T']);
+    await runTests();
   },
 });
 

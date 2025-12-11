@@ -13,37 +13,34 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
+
 /** @module @jsdoc/tag/lib/dictionary */
-import { log } from '@jsdoc/util';
 
 import definitions from './definitions/index.js';
 
 const DEFINITIONS = {
-  closure: 'closure',
-  jsdoc: 'jsdoc',
+  closure: 'getClosureTags',
+  jsdoc: 'getJsdocTags',
 };
 
 /** @private */
 class TagDefinition {
+  #dictionary;
+
   constructor(dict, title, etc) {
-    const self = this;
+    etc ??= {};
 
-    etc = etc || {};
-
+    this.#dictionary = dict;
     this.title = dict.normalize(title);
 
-    Object.defineProperty(this, '_dictionary', {
-      value: dict,
-    });
-
     Object.keys(etc).forEach((p) => {
-      self[p] = etc[p];
+      this[p] = etc[p];
     });
   }
 
   /** @private */
   synonym(synonymName) {
-    this._dictionary.defineSynonym(this.title, synonymName);
+    this.#dictionary.defineSynonym(this.title, synonymName);
 
     return this;
   }
@@ -55,14 +52,14 @@ export class Dictionary {
     // used to confirm whether a tag is defined/valid, rather than requiring every set of tag
     // definitions to contain the internal tags.
     this._tags = {};
-    this._tagSynonyms = {};
+    this._tagSynonyms = new Map();
     // The longnames for `Package` objects include a `package` namespace. There's no `package`
     // tag, though, so we declare the namespace here.
     // TODO: Consider making this a fallback as suggested above for internal tags.
     this._namespaces = ['package'];
   }
 
-  _defineNamespace(title) {
+  #defineNamespace(title) {
     title = this.normalize(title || '');
 
     if (title && !this._namespaces.includes(title)) {
@@ -78,7 +75,7 @@ export class Dictionary {
     this._tags[tagDef.title] = tagDef;
 
     if (tagDef.isNamespace) {
-      this._defineNamespace(tagDef.title);
+      this.#defineNamespace(tagDef.title);
     }
     if (tagDef.synonyms) {
       tagDef.synonyms.forEach((synonym) => {
@@ -100,12 +97,14 @@ export class Dictionary {
   }
 
   defineSynonym(title, synonym) {
-    this._tagSynonyms[synonym.toLowerCase()] = this.normalize(title);
+    this._tagSynonyms.set(synonym.toLowerCase(), this.normalize(title));
   }
 
-  static fromConfig(env) {
-    let dictionaries = env.conf.tags.dictionaries;
+  static fromEnv(env) {
     const dict = new Dictionary();
+    const { conf, log } = env;
+    let dictionaries = conf.tags.dictionaries;
+    let tagDefs;
 
     if (!dictionaries) {
       log.error(
@@ -117,9 +116,9 @@ export class Dictionary {
         .slice()
         .reverse()
         .forEach((dictName) => {
-          const tagDefs = definitions[DEFINITIONS[dictName]];
-
-          if (!tagDefs) {
+          try {
+            tagDefs = definitions[DEFINITIONS[dictName]](env);
+          } catch (e) {
             log.error(
               'The configuration setting "tags.dictionaries" contains ' +
                 `the unknown dictionary name ${dictName}. Ignoring the dictionary.`
@@ -131,7 +130,7 @@ export class Dictionary {
           dict.defineTags(tagDefs);
         });
 
-      dict.defineTags(definitions.internal);
+      dict.defineTags(definitions.getInternalTags());
     }
 
     return dict;
@@ -153,6 +152,10 @@ export class Dictionary {
   }
 
   lookup(title) {
+    return this.lookUp(title);
+  }
+
+  lookUp(title) {
     title = this.normalize(title);
 
     if (Object.hasOwn(this._tags, title)) {
@@ -162,10 +165,6 @@ export class Dictionary {
     return false;
   }
 
-  lookUp(title) {
-    return this.lookup(title);
-  }
-
   normalise(title) {
     return this.normalize(title);
   }
@@ -173,10 +172,6 @@ export class Dictionary {
   normalize(title) {
     const canonicalName = title.toLowerCase();
 
-    if (Object.hasOwn(this._tagSynonyms, canonicalName)) {
-      return this._tagSynonyms[canonicalName];
-    }
-
-    return canonicalName;
+    return this._tagSynonyms.get(canonicalName) ?? canonicalName;
   }
 }

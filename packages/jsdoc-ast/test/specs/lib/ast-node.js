@@ -13,6 +13,7 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
+
 import babelParser from '@babel/parser';
 
 import { parserOptions } from '../../../lib/ast-builder.js';
@@ -24,7 +25,7 @@ describe('@jsdoc/ast/lib/ast-node', () => {
     return babelParser.parse(str, parserOptions).program.body[0];
   }
 
-  // create the AST nodes we'll be testing
+  // Create the AST nodes we'll be testing.
   const arrayExpression = parse('[,]').expression;
   const arrowFunctionExpression = parse('var foo = () => {};').declarations[0].init;
   const assignmentExpression = parse('foo = 1;').expression;
@@ -44,6 +45,7 @@ describe('@jsdoc/ast/lib/ast-node', () => {
   const methodDefinition1 = parse('class Foo { bar() {} }').body.body[0];
   const methodDefinition2 = parse('var foo = () => class { bar() {} };').declarations[0].init.body
     .body[0];
+  const privateName = parse('class MyClass { #myPrivateMethod() {} }').body.body[0].key;
   const propertyGet = parse('var foo = { get bar() {} };').declarations[0].init.properties[0];
   const propertyInit = parse('var foo = { bar: {} };').declarations[0].init.properties[0];
   const propertySet = parse('var foo = { set bar(a) {} };').declarations[0].init.properties[0];
@@ -53,12 +55,24 @@ describe('@jsdoc/ast/lib/ast-node', () => {
   const variableDeclarator1 = parse('var foo = 1;').declarations[0];
   const variableDeclarator2 = parse('var foo;').declarations[0];
 
+  // Create AST nodes that we can use to autodetect the module type.
+  const amdDefine = parse('define("foo", ["node:fs"], function (fs) { fs; });').expression;
+  const amdDriverScript = parse('require(["foo"], function (foo) {});').expression;
+  const commonJsExports = parse('exports.foo = () => {};').expression;
+  const commonJsRequire = parse('const fs = require("node:fs");').declarations[0].init;
+  const es6Export = parse('export function foo() {}');
+  const es6Import = parse('import { readFile } from "node:fs/promises";');
+
   it('should exist', () => {
     expect(astNode).toBeObject();
   });
 
   it('should export an addNodeProperties method', () => {
     expect(astNode.addNodeProperties).toBeFunction();
+  });
+
+  it('exports a detectModuleType method', () => {
+    expect(astNode.detectModuleType).toBeFunction();
   });
 
   it('should export a getInfo method', () => {
@@ -85,6 +99,10 @@ describe('@jsdoc/ast/lib/ast-node', () => {
     expect(astNode.isScope).toBeFunction();
   });
 
+  it('exports a MODULE_TYPES enum', () => {
+    expect(astNode.MODULE_TYPES).toBeObject();
+  });
+
   it('should export a nodeToString method', () => {
     expect(astNode.nodeToString).toBeFunction();
   });
@@ -94,22 +112,11 @@ describe('@jsdoc/ast/lib/ast-node', () => {
   });
 
   describe('addNodeProperties', () => {
-    it('should return null for undefined input', () => {
+    it('returns `null` for undefined input', () => {
       expect(astNode.addNodeProperties()).toBe(null);
     });
 
-    it('should return null if the input is not an object', () => {
-      expect(astNode.addNodeProperties('foo')).toBe(null);
-    });
-
-    it('should preserve existing properties that are not "node properties"', () => {
-      const node = astNode.addNodeProperties({ foo: 1 });
-
-      expect(node).toBeObject();
-      expect(node.foo).toBe(1);
-    });
-
-    it('should add a nodeId if necessary', () => {
+    it('sets the `nodeId`', () => {
       const node = astNode.addNodeProperties({});
       const descriptor = Object.getOwnPropertyDescriptor(node, 'nodeId');
 
@@ -118,14 +125,7 @@ describe('@jsdoc/ast/lib/ast-node', () => {
       expect(descriptor.enumerable).toBeTrue();
     });
 
-    it('should not overwrite an existing nodeId', () => {
-      const nodeId = 'foo';
-      const node = astNode.addNodeProperties({ nodeId: nodeId });
-
-      expect(node.nodeId).toBe(nodeId);
-    });
-
-    it('should add a non-enumerable, writable parent if necessary', () => {
+    it('sets a non-enumerable, writable `parent`', () => {
       const node = astNode.addNodeProperties({});
       const descriptor = Object.getOwnPropertyDescriptor(node, 'parent');
 
@@ -135,20 +135,7 @@ describe('@jsdoc/ast/lib/ast-node', () => {
       expect(descriptor.writable).toBeTrue();
     });
 
-    it('should not overwrite an existing parent', () => {
-      const parent = {};
-      const node = astNode.addNodeProperties({ parent: parent });
-
-      expect(node.parent).toBe(parent);
-    });
-
-    it('should not overwrite a null parent', () => {
-      const node = astNode.addNodeProperties({ parent: null });
-
-      expect(node.parent).toBeNull();
-    });
-
-    it('should add an enumerable parentId', () => {
+    it('sets an enumerable `parentId`', () => {
       const node = astNode.addNodeProperties({});
       const descriptor = Object.getOwnPropertyDescriptor(node, 'parentId');
 
@@ -156,13 +143,13 @@ describe('@jsdoc/ast/lib/ast-node', () => {
       expect(descriptor.enumerable).toBeTrue();
     });
 
-    it('should provide a null parentId for nodes with no parent', () => {
+    it('sets `parentId` to `null` for nodes with no parent', () => {
       const node = astNode.addNodeProperties({});
 
       expect(node.parentId).toBeNull();
     });
 
-    it('should provide a non-null parentId for nodes with a parent', () => {
+    it('sets a non-null `parentId` for nodes with a parent', () => {
       const node = astNode.addNodeProperties({});
       const parent = astNode.addNodeProperties({});
 
@@ -171,7 +158,7 @@ describe('@jsdoc/ast/lib/ast-node', () => {
       expect(node.parentId).toBe(parent.nodeId);
     });
 
-    it('should add a non-enumerable, writable enclosingScope if necessary', () => {
+    it('sets a non-enumerable, writable `enclosingScope`', () => {
       const node = astNode.addNodeProperties({});
       const descriptor = Object.getOwnPropertyDescriptor(node, 'enclosingScope');
 
@@ -181,20 +168,7 @@ describe('@jsdoc/ast/lib/ast-node', () => {
       expect(descriptor.writable).toBeTrue();
     });
 
-    it('should not overwrite an existing enclosingScope', () => {
-      const enclosingScope = {};
-      const node = astNode.addNodeProperties({ enclosingScope: enclosingScope });
-
-      expect(node.enclosingScope).toBe(enclosingScope);
-    });
-
-    it('should not overwrite a null enclosingScope', () => {
-      const node = astNode.addNodeProperties({ enclosingScope: null });
-
-      expect(node.enclosingScope).toBeNull();
-    });
-
-    it('should add an enumerable enclosingScopeId', () => {
+    it('sets an enumerable `enclosingScopeId`', () => {
       const node = astNode.addNodeProperties({});
       const descriptor = Object.getOwnPropertyDescriptor(node, 'enclosingScopeId');
 
@@ -202,19 +176,51 @@ describe('@jsdoc/ast/lib/ast-node', () => {
       expect(descriptor.enumerable).toBeTrue();
     });
 
-    it('should provide a null enclosingScopeId for nodes with no enclosing scope', () => {
+    it('sets `enclosingScopeId` to `null` for nodes with no enclosing scope', () => {
       const node = astNode.addNodeProperties({});
 
       expect(node.enclosingScopeId).toBeNull();
     });
 
-    it('should provide a non-null enclosingScopeId for nodes with an enclosing scope', () => {
+    it('sets a non-null `enclosingScopeId` for nodes with an enclosing scope', () => {
       const node = astNode.addNodeProperties({});
       const enclosingScope = astNode.addNodeProperties({});
 
       node.enclosingScope = enclosingScope;
 
       expect(node.enclosingScopeId).toBe(enclosingScope.nodeId);
+    });
+  });
+
+  describe('detectModuleType', () => {
+    const { detectModuleType, MODULE_TYPES } = astNode;
+
+    it('returns `null` if the module type cannot be inferred from the node', () => {
+      expect(detectModuleType(identifier)).toBeNull();
+    });
+
+    it('detects AMD modules that use `define()`', () => {
+      expect(detectModuleType(amdDefine)).toBe(MODULE_TYPES.AMD);
+    });
+
+    it('detects AMD driver scripts', () => {
+      expect(detectModuleType(amdDriverScript)).toBe(MODULE_TYPES.AMD);
+    });
+
+    it('detects CommonJS modules that assign to `exports`', () => {
+      expect(detectModuleType(commonJsExports)).toBe(MODULE_TYPES.COMMON_JS);
+    });
+
+    it('detects CommonJS modules that call `require()`', () => {
+      expect(detectModuleType(commonJsRequire)).toBe(MODULE_TYPES.COMMON_JS);
+    });
+
+    it('detects ES6 modules that use `export`', () => {
+      expect(detectModuleType(es6Export)).toBe(MODULE_TYPES.ES6);
+    });
+
+    it('detects ES6 modules that use `import`', () => {
+      expect(detectModuleType(es6Import)).toBe(MODULE_TYPES.ES6);
     });
   });
 
@@ -550,6 +556,10 @@ describe('@jsdoc/ast/lib/ast-node', () => {
         expect(astNode.nodeToValue(methodDefinition2)).toBe('<anonymous>');
       }
     );
+
+    it('returns the name, including the `#` prefix, for private names', () => {
+      expect(astNode.nodeToValue(privateName)).toBe('#myPrivateMethod');
+    });
 
     it('should return "this" for this expressions', () => {
       expect(astNode.nodeToValue(thisExpression)).toBe('this');

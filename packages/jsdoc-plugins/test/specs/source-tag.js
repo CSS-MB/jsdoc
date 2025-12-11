@@ -13,7 +13,7 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
-/* global jsdoc */
+
 import path from 'node:path';
 
 import { plugins } from '@jsdoc/core';
@@ -21,12 +21,17 @@ import { plugins } from '@jsdoc/core';
 describe('source-tag plugin', () => {
   const __dirname = jsdoc.dirname(import.meta.url);
   let docSet;
-  const parser = jsdoc.createParser();
+  let parser;
   const pluginPath = path.join(__dirname, '../../source-tag.js');
 
-  beforeAll(async () => {
-    await plugins.installPlugins([pluginPath], parser, jsdoc.deps);
+  beforeEach(async () => {
+    parser = jsdoc.createParser();
+    await plugins.installPlugins([pluginPath], parser, jsdoc.env);
     docSet = jsdoc.getDocSetFromFile(pluginPath, parser);
+  });
+
+  afterEach(() => {
+    parser._stopListening();
   });
 
   it("should set the lineno and filename of the doclet's meta property", () => {

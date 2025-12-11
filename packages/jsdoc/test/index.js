@@ -13,9 +13,13 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
+
+import { config, Env } from '@jsdoc/core';
+import { Dictionary } from '@jsdoc/tag';
 import Jasmine from 'jasmine';
 import ConsoleReporter from 'jasmine-console-reporter';
 
+const DEFAULT_CONFIG = config.defaultConfig;
 const SCHEMA_SPEC = 'packages/jsdoc/test/specs/validate.js';
 const SPEC_FILES = [
   `!${SCHEMA_SPEC}`,
@@ -25,9 +29,9 @@ const SPEC_FILES = [
   SCHEMA_SPEC,
 ];
 
-export default function test(deps) {
+export default function test() {
+  const env = new Env();
   const jasmine = new Jasmine();
-  const matcher = deps.get('options').matcher;
   const reporter = new ConsoleReporter({
     beep: false,
     verbosity: {
@@ -52,11 +56,13 @@ export default function test(deps) {
     stopSpecOnExpectationFailure: false,
   });
 
-  // Make dependencies available to all tests.
+  env.conf = DEFAULT_CONFIG;
+  env.tags = Dictionary.fromEnv(env);
+  // Make JSDoc environment available to all tests.
   if (!global.jsdoc) {
     global.jsdoc = {};
   }
-  global.jsdoc.deps = deps;
+  global.jsdoc.env = env;
 
-  return jasmine.execute(SPEC_FILES, matcher);
+  return jasmine.execute(SPEC_FILES);
 }

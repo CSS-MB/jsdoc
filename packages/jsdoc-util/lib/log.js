@@ -13,13 +13,42 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
-import EventBus from './bus.js';
 
-const bus = new EventBus('jsdoc');
-const loggerFuncs = {};
+export const LOG_TYPES = ['debug', 'error', 'info', 'fatal', 'verbose', 'warn'];
 
-['debug', 'error', 'info', 'fatal', 'verbose', 'warn'].forEach((fn) => {
-  loggerFuncs[fn] = (...args) => bus.emit(`logger:${fn}`, ...args);
-});
+/**
+ * Logging functions for JSDoc.
+ *
+ * @typedef {Object} module:@jsdoc/util~logFunctions
+ * @property {function(...*)} debug - The `debug` logging function.
+ * @property {function(...*)} error - The `error` logging function.
+ * @property {function(...*)} info - The `info` logging function.
+ * @property {function(...*)} fatal - The `fatal` logging function.
+ * @property {function(...*)} verbose - The `verbose` logging function.
+ * @property {function(...*)} warn - The `warn` logging function.
+ */
 
-export default loggerFuncs;
+/**
+ * Creates shared logging functions for JSDoc.
+ *
+ * Calling a logging function has the following effects:
+ *
+ * +  The specified `emitter` emits an event with the name `logger:LOG_TYPE`, where `LOG_TYPE` is a
+ *    value like `debug` or `verbose`.
+ * +  If JSDoc's CLI is running, and if the user asked to see log messages of the specified type,
+ *    then the message is written to the console.
+ *
+ * @alias module:@jsdoc/util.getLogFunctions
+ * @param {node:events} emitter - The event emitter to use. In general, you should use the emitter
+ *    stored in {@link module:@jsdoc/core.Env#emitter Env#emitter}.
+ * @returns {module:@jsdoc/util~logFunctions} The logging functions.
+ */
+export default function getLogFunctions(emitter) {
+  const logFunctions = {};
+
+  LOG_TYPES.forEach((type) => {
+    logFunctions[type] = (...args) => emitter.emit(`logger:${type}`, ...args);
+  });
+
+  return logFunctions;
+}

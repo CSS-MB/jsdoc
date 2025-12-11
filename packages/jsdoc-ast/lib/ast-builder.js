@@ -13,8 +13,8 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
+
 import babelParser from '@babel/parser';
-import { log } from '@jsdoc/util';
 import _ from 'lodash';
 
 // Exported so we can use them in tests.
@@ -25,60 +25,65 @@ export const parserOptions = {
   allowSuperOutsideMethod: true,
   allowUndeclaredExports: true,
   plugins: [
-    'asyncGenerators',
-    'bigInt',
-    'classPrivateMethods',
-    'classPrivateProperties',
-    'classProperties',
+    'asyncDoExpressions',
     [
       'decorators',
       {
-        decoratorsBeforeExport: true,
+        version: '2023-11',
       },
     ],
+    'decoratorAutoAccessors',
+    'deferredImportEvaluation',
+    'destructuringPrivate',
     'doExpressions',
-    'dynamicImport',
     'estree',
+    'explicitResourceManagement',
     'exportDefaultFrom',
-    'exportNamespaceFrom',
     'functionBind',
     'functionSent',
     'importMeta',
+    'importReflection',
     'jsx',
-    'logicalAssignment',
-    'nullishCoalescingOperator',
-    'numericSeparator',
-    'objectRestSpread',
-    'optionalCatchBinding',
-    'optionalChaining',
+    'moduleBlocks',
+    [
+      'optionalChainingAssign',
+      {
+        version: '2023-07',
+      },
+    ],
+    'partialApplication',
     [
       'pipelineOperator',
       {
-        proposal: 'minimal',
+        proposal: 'hack',
+        topicToken: '^^',
       },
     ],
+    'recordAndTuple',
+    'sourcePhaseImports',
     'throwExpressions',
   ],
   ranges: true,
 };
 
-function parse(source, filename, sourceType) {
-  let ast;
-  const options = _.defaults({}, parserOptions, { sourceType });
-
-  try {
-    ast = babelParser.parse(source, options);
-  } catch (e) {
-    log.error(`Unable to parse ${filename}: ${e.message}`);
-  }
-
-  return ast;
-}
-
 // TODO: docs
 export class AstBuilder {
-  // TODO: docs
-  static build(source, filename, sourceType) {
-    return parse(source, filename, sourceType);
+  #log;
+
+  constructor(env) {
+    this.#log = env.log;
+  }
+
+  build(source, filename, sourceType) {
+    let ast;
+    const options = _.defaults({}, parserOptions, { sourceType });
+
+    try {
+      ast = babelParser.parse(source, options);
+    } catch (e) {
+      this.#log.error(`Unable to parse ${filename}: ${e.message}`);
+    }
+
+    return ast;
   }
 }

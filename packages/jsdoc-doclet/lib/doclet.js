@@ -13,17 +13,14 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
+
 import path from 'node:path';
 
 import { astNode, Syntax } from '@jsdoc/ast';
-import { name as jsdocName } from '@jsdoc/core';
-import { Tag } from '@jsdoc/tag';
-import _ from 'lodash';
-
-const {
+import {
   applyNamespace,
-  hasLeadingScope,
-  hasTrailingScope,
+  getLeadingScope,
+  getTrailingScope,
   LONGNAMES,
   MODULE_NAMESPACE,
   nameIsLongname,
@@ -32,17 +29,51 @@ const {
   SCOPE,
   SCOPE_TO_PUNC,
   toParts,
-} = jsdocName;
+} from '@jsdoc/name';
+import { Tag } from '@jsdoc/tag';
+import _ from 'lodash';
+import onChange from 'on-change';
+
 const { isFunction } = astNode;
 
+// Forward-declare Doclet class.
+export let Doclet;
+
 const ACCESS_LEVELS = ['package', 'private', 'protected', 'public'];
+const ALL_SCOPE_NAMES = _.values(SCOPE.NAMES);
+const CLASSDESC_TAG = '@classdesc';
 const DEFAULT_SCOPE = SCOPE.NAMES.STATIC;
+const DESCRIPTION_TAG = '@description';
 // TODO: `class` should be on this list, right? What are the implications of adding it?
-const GLOBAL_KINDS = ['constant', 'function', 'member', 'typedef'];
+const GLOBAL_KINDS = ['constant', 'enum', 'function', 'member', 'typedef'];
+const ON_CHANGE_OPTIONS = {
+  ignoreDetached: true,
+  pathAsArray: true,
+};
+const REGEXP_COMMENT_STARTS_WITH_TAG = /^\s*@/;
+const REGEXP_GLOBAL = new RegExp(`^${LONGNAMES.GLOBAL}\\.?`);
+const REGEXP_ONLY_WHITESPACE = /^\s*$/;
+
+export const WATCHABLE_PROPS = [
+  'access',
+  'augments',
+  'borrowed',
+  'ignore',
+  'implements',
+  'kind',
+  'listens',
+  'longname',
+  'memberof',
+  'mixes',
+  'scope',
+  'undocumented',
+];
+
+WATCHABLE_PROPS.sort();
 
 function fakeMeta(node) {
   return {
-    type: node ? node.type : null,
+    type: node?.type,
     node: node,
   };
 }
@@ -74,7 +105,7 @@ function codeToKind(code) {
   } else if (code.type === Syntax.ExportSpecifier) {
     // this value will often be an Identifier for a variable, which isn't very useful
     kind = codeToKind(fakeMeta(node.local));
-  } else if (node && node.parent && isFunction(node.parent)) {
+  } else if (isFunction(node?.parent)) {
     kind = 'param';
   }
 
@@ -142,14 +173,18 @@ function toTags(docletSrc) {
   return tagData;
 }
 
+// If no tag is present at the start of the doclet source, then add a JSDoc tag, so that the initial
+// text is treated as a description.
 function fixDescription(docletSrc, { code }) {
-  let isClass;
+  let newTag;
 
-  if (!/^\s*@/.test(docletSrc) && docletSrc.replace(/\s/g, '').length) {
-    isClass =
-      code && (code.type === Syntax.ClassDeclaration || code.type === Syntax.ClassExpression);
+  if (!REGEXP_COMMENT_STARTS_WITH_TAG.test(docletSrc) && !REGEXP_ONLY_WHITESPACE.test(docletSrc)) {
+    newTag =
+      code?.type === Syntax.ClassDeclaration || code?.type === Syntax.ClassExpression
+        ? CLASSDESC_TAG
+        : DESCRIPTION_TAG;
 
-    docletSrc = `${isClass ? '@classdesc' : '@description'} ${docletSrc}`;
+    docletSrc = newTag + ' ' + docletSrc;
   }
 
   return docletSrc;
@@ -167,11 +202,17 @@ function fixDescription(docletSrc, { code }) {
  */
 function resolve(doclet) {
   let about = {};
-  let memberof = doclet.memberof || '';
+  let leadingScope;
+  let memberof = doclet.memberof ?? '';
+  let forcedMemberof;
   let metaName;
-  let name = doclet.name ? String(doclet.name) : '';
+  let name = doclet.name ?? '';
   let puncAndName;
   let puncAndNameIndex;
+
+  if (doclet.forceMemberof) {
+    forcedMemberof = memberof;
+  }
 
   // Change `MyClass.prototype.instanceMethod` to `MyClass#instanceMethod`
   // (but not in function params, which lack `doclet.kind`).
@@ -190,7 +231,7 @@ function resolve(doclet) {
     }
   }
   // Member of a var in an outer scope?
-  else if (name && !memberof && doclet.meta.code && doclet.meta.code.funcscope) {
+  else if (name && !memberof && doclet.meta.code?.funcscope) {
     name = doclet.longname = doclet.meta.code.funcscope + SCOPE.PUNC.INNER + name;
   }
 
@@ -200,27 +241,24 @@ function resolve(doclet) {
 
     // The name is a complete longname, like `@name foo.bar` with `@memberof foo`.
     if (name && nameIsLongname(name, memberof) && name !== memberof) {
-      about = toParts(name, doclet.forceMemberof ? memberof : undefined);
+      about = toParts(name, forcedMemberof);
     }
     // The name and memberof are identical and refer to a module, like `@name module:foo` with
     // `@memberof module:foo`.
-    else if (name && name === memberof && name.indexOf(MODULE_NAMESPACE) === 0) {
-      about = toParts(name, doclet.forceMemberof ? memberof : undefined);
+    else if (name && name === memberof && name.startsWith(MODULE_NAMESPACE)) {
+      about = toParts(name, forcedMemberof);
     }
     // The name and memberof are identical, like `@name foo` with `@memberof foo`.
     else if (name && name === memberof) {
       doclet.scope = doclet.scope || DEFAULT_SCOPE;
       name = memberof + SCOPE_TO_PUNC[doclet.scope] + name;
-      about = toParts(name, doclet.forceMemberof ? memberof : undefined);
+      about = toParts(name, forcedMemberof);
     }
     // Like `@memberof foo#` or `@memberof foo~`.
-    else if (name && hasTrailingScope(memberof)) {
-      about = toParts(memberof + name, doclet.forceMemberof ? memberof : undefined);
+    else if (name && getTrailingScope(memberof)) {
+      about = toParts(memberof + name, forcedMemberof);
     } else if (name && doclet.scope) {
-      about = toParts(
-        memberof + (SCOPE_TO_PUNC[doclet.scope] || '') + name,
-        doclet.forceMemberof ? memberof : undefined
-      );
+      about = toParts(memberof + (SCOPE_TO_PUNC[doclet.scope] ?? '') + name, forcedMemberof);
     }
   } else {
     // No memberof.
@@ -242,7 +280,7 @@ function resolve(doclet) {
   if (doclet.scope === SCOPE.NAMES.GLOBAL) {
     // via @global tag?
     doclet.setLongname(doclet.name);
-    delete doclet.memberof;
+    doclet.memberof = undefined;
   } else if (about.scope) {
     if (about.memberof === LONGNAMES.GLOBAL) {
       // via @memberof <global> ?
@@ -251,10 +289,11 @@ function resolve(doclet) {
       doclet.scope = PUNC_TO_SCOPE[about.scope];
     }
   } else if (doclet.name && doclet.memberof && !doclet.longname) {
-    if (hasLeadingScope(doclet.name)) {
-      doclet.scope = PUNC_TO_SCOPE[RegExp.$1];
+    leadingScope = getLeadingScope(doclet.name);
+    if (leadingScope) {
+      doclet.scope = PUNC_TO_SCOPE[leadingScope];
       doclet.name = doclet.name.substr(1);
-    } else if (doclet.meta.code && doclet.meta.code.name) {
+    } else if (doclet.meta.code?.name) {
       // HACK: Handle cases where an ES 2015 class is a static memberof something else, and
       // the class has instance members. In these cases, we have to detect the instance
       // members' scope by looking at the meta info. There's almost certainly a better way to
@@ -267,7 +306,7 @@ function resolve(doclet) {
       }
     }
 
-    doclet.scope = doclet.scope || DEFAULT_SCOPE;
+    doclet.scope ??= DEFAULT_SCOPE;
     doclet.setLongname(doclet.memberof + SCOPE_TO_PUNC[doclet.scope] + doclet.name);
   }
 
@@ -282,9 +321,7 @@ function resolve(doclet) {
 }
 
 function removeGlobal(longname) {
-  const globalRegexp = new RegExp(`^${LONGNAMES.GLOBAL}\\.?`);
-
-  return longname.replace(globalRegexp, '');
+  return longname.replace(REGEXP_GLOBAL, '');
 }
 
 /**
@@ -296,27 +333,29 @@ function removeGlobal(longname) {
  * available.
  */
 function getFilepath(doclet) {
-  if (!doclet || !doclet.meta || !doclet.meta.filename) {
+  if (!doclet?.meta?.filename) {
     return '';
   }
 
-  return path.join(doclet.meta.path || '', doclet.meta.filename);
+  return path.join(doclet.meta.path ?? '', doclet.meta.filename);
+}
+
+function emitDocletChanged(emitter, doclet, property, oldValue, newValue) {
+  emitter.emit('docletChanged', { doclet, property, oldValue, newValue });
 }
 
 function clone(source, target, properties) {
   properties.forEach((property) => {
-    switch (typeof source[property]) {
-      case 'function':
-        // do nothing
-        break;
+    const sourceProperty = source[property];
 
-      case 'object':
-        target[property] = _.cloneDeep(source[property]);
-
-        break;
-
-      default:
-        target[property] = source[property];
+    if (_.isFunction(sourceProperty)) {
+      // Do nothing.
+    } else if (_.isArray(sourceProperty)) {
+      target[property] = sourceProperty.slice();
+    } else if (_.isObject(sourceProperty)) {
+      target[property] = _.cloneDeep(sourceProperty);
+    } else {
+      target[property] = sourceProperty;
     }
   });
 }
@@ -331,10 +370,17 @@ function clone(source, target, properties) {
  * @param {module:@jsdoc/doclet.Doclet} target - The doclet to which properties will be copied.
  * @param {Array.<string>} exclude - The names of properties to exclude from copying.
  */
-function copyMostProperties(primary, secondary, target, exclude) {
-  const primaryProperties = _.difference(Object.getOwnPropertyNames(primary), exclude);
+function copyPropsWithExcludelist(primary, secondary, target, exclude) {
+  // Get names of primary and secondary properties that don't contain the value `undefined`.
+  const primaryPropertyNames = Object.getOwnPropertyNames(primary).filter(
+    (name) => !_.isUndefined(primary[name])
+  );
+  const primaryProperties = _.difference(primaryPropertyNames, exclude);
+  const secondaryPropertyNames = Object.getOwnPropertyNames(secondary).filter(
+    (name) => !_.isUndefined(secondary[name])
+  );
   const secondaryProperties = _.difference(
-    Object.getOwnPropertyNames(secondary),
+    secondaryPropertyNames,
     exclude.concat(primaryProperties)
   );
 
@@ -353,60 +399,121 @@ function copyMostProperties(primary, secondary, target, exclude) {
  * @param {module:@jsdoc/doclet.Doclet} target - The doclet to which properties will be copied.
  * @param {Array.<string>} include - The names of properties to copy.
  */
-function copySpecificProperties(primary, secondary, target, include) {
+function copyPropsWithIncludelist(primary, secondary, target, include) {
   include.forEach((property) => {
-    if (Object.hasOwn(primary, property) && primary[property] && primary[property].length) {
+    if (Object.hasOwn(primary, property) && primary[property]?.length) {
       target[property] = _.cloneDeep(primary[property]);
-    } else if (
-      Object.hasOwn(secondary, property) &&
-      secondary[property] &&
-      secondary[property].length
-    ) {
+    } else if (Object.hasOwn(secondary, property) && secondary[property]?.length) {
       target[property] = _.cloneDeep(secondary[property]);
     }
   });
 }
 
 /**
- * Represents a single JSDoc comment.
+ * Information about a single JSDoc comment, or a single symbol in a source file.
  *
  * @alias module:@jsdoc/doclet.Doclet
  */
-export class Doclet {
-  #accessConfig;
+Doclet = class {
   #dictionary;
 
   /**
-   * Create a doclet.
+   * Creates a doclet.
    *
    * @param {string} docletSrc - The raw source code of the jsdoc comment.
    * @param {object} meta - Properties describing the code related to this comment.
-   * @param {object} dependencies - JSDoc dependencies.
+   * @param {object} env - JSDoc environment.
    */
-  constructor(docletSrc, meta, dependencies) {
+  constructor(docletSrc, meta, env) {
+    const accessConfig = env.config?.opts?.access?.slice() ?? [];
+    const emitter = env.emitter;
+    const boundEmitDocletChanged = emitDocletChanged.bind(null, emitter, this);
     let newTags = [];
 
-    meta = meta || {};
-    this.#accessConfig = dependencies.get('config')?.opts?.access ?? [];
-    this.#dictionary = dependencies.get('tags');
-    /** The original text of the comment from the source code. */
-    this.comment = docletSrc;
-    Object.defineProperty(this, 'dependencies', {
-      enumerable: false,
-      value: dependencies,
+    this.#dictionary = env.tags;
+
+    Object.defineProperty(this, 'accessConfig', {
+      value: accessConfig,
+      writable: true,
     });
+    Object.defineProperty(this, 'env', {
+      value: env,
+    });
+    Object.defineProperty(this, 'watchableProps', {
+      value: {},
+      writable: true,
+    });
+    WATCHABLE_PROPS.forEach((prop) => this.#defineWatchableProp(prop));
+
+    /**
+     * The text of the comment from the source code.
+     *
+     * @type {string}
+     */
+    this.comment = docletSrc;
+    meta ??= {};
     this.setMeta(meta);
+    docletSrc = fixDescription(unwrap(docletSrc), meta);
 
-    docletSrc = unwrap(docletSrc);
-    docletSrc = fixDescription(docletSrc, meta);
-
-    newTags = toTags.call(this, docletSrc);
-
+    newTags = toTags(docletSrc);
     for (let i = 0, l = newTags.length; i < l; i++) {
       this.addTag(newTags[i].title, newTags[i].text);
     }
-
     this.postProcess();
+
+    // Now that we've set the doclet's initial properties, listen for changes to those properties,
+    // unless we were told not to.
+    if (meta._watch !== false) {
+      this.watchableProps = onChange(
+        this.watchableProps,
+        (property, oldValue, newValue) =>
+          this.#onChangeHandler(boundEmitDocletChanged, property, oldValue, newValue),
+        ON_CHANGE_OPTIONS
+      );
+    }
+  }
+
+  /**
+   * Creates a copy of an existing doclet.
+   *
+   * @param {module:@jsdoc/doclet.Doclet} doclet - The doclet to copy.
+   * @returns {module:@jsdoc/doclet.Doclet} A copy of the doclet.
+   */
+  static clone(doclet) {
+    return Doclet.combineDoclets(doclet, Doclet.emptyDoclet(doclet.env));
+  }
+
+  /**
+   * Combines two doclets into a new doclet.
+   *
+   * @param {module:@jsdoc/doclet.Doclet} primary - The doclet whose properties will be used.
+   * @param {module:@jsdoc/doclet.Doclet} secondary - The doclet to use as a fallback for properties
+   * that the primary doclet does not have.
+   * @returns {module:@jsdoc/doclet.Doclet} A new doclet that combines the primary and secondary
+   * doclets.
+   */
+  static combineDoclets(primary, secondary) {
+    const excludelist = ['env', 'params', 'properties', 'undocumented'];
+    const includelist = ['params', 'properties'];
+    const target = Doclet.emptyDoclet(secondary.env);
+
+    // First, copy most properties to the target doclet.
+    copyPropsWithExcludelist(primary, secondary, target, excludelist);
+    // Then copy a few specific properties to the target doclet, as long as they're not falsy and
+    // have a length greater than 0.
+    copyPropsWithIncludelist(primary, secondary, target, includelist);
+
+    return target;
+  }
+
+  /**
+   * Creates an empty doclet.
+   *
+   * @param {module:@jsdoc/core.Env} env - The JSDoc environment to use.
+   * @returns {module:@jsdoc/doclet.Doclet} An empty doclet.
+   */
+  static emptyDoclet(env) {
+    return new Doclet('', {}, env);
   }
 
   // TODO: We call this method in the constructor _and_ in `jsdoc/src/handlers`. It appears that
@@ -421,10 +528,10 @@ export class Doclet {
       this.setLongname(this.name);
     }
     if (this.memberof === '') {
-      delete this.memberof;
+      this.memberof = undefined;
     }
 
-    if (!this.kind && this.meta && this.meta.code) {
+    if (!this.kind && this.meta?.code) {
       this.addTag('kind', codeToKind(this.meta.code));
     }
 
@@ -433,7 +540,7 @@ export class Doclet {
     }
 
     // add in any missing param names
-    if (this.params && this.meta && this.meta.code && this.meta.code.paramnames) {
+    if (this.params && this.meta?.code?.paramnames) {
       for (let i = 0, l = this.params.length; i < l; i++) {
         if (!this.params[i].name) {
           this.params[i].name = this.meta.code.paramnames[i] || '';
@@ -443,27 +550,27 @@ export class Doclet {
   }
 
   /**
-   * Add a tag to the doclet.
+   * Adds a tag to the doclet.
    *
    * @param {string} title - The title of the tag being added.
    * @param {string} [text] - The text of the tag being added.
    */
   addTag(title, text) {
     const tagDef = this.#dictionary.lookUp(title);
-    const newTag = new Tag(title, text, this.meta, this.dependencies);
+    const newTag = new Tag(title, text, this.meta, this.env);
 
-    if (tagDef && tagDef.onTagged) {
+    if (tagDef?.onTagged) {
       tagDef.onTagged(this, newTag);
     }
 
     if (!tagDef) {
-      this.tags = this.tags || [];
+      this.tags ??= [];
       this.tags.push(newTag);
     }
   }
 
   /**
-   * Check whether the doclet represents a globally available symbol.
+   * Checks whether the doclet represents a globally available symbol.
    *
    * @returns {boolean} `true` if the doclet represents a global; `false` otherwise.
    */
@@ -472,12 +579,12 @@ export class Doclet {
   }
 
   /**
-   * Check whether the doclet should be used to generate output.
+   * Checks whether the doclet should be used to generate output.
    *
    * @returns {boolean} `true` if the doclet should be used to generate output; `false` otherwise.
    */
   isVisible() {
-    const accessConfig = this.#accessConfig;
+    const accessConfig = this.accessConfig;
 
     // By default, we don't use:
     //
@@ -485,7 +592,11 @@ export class Doclet {
     // + Doclets that claim to belong to an anonymous scope
     // + "Undocumented" doclets (usually code with no JSDoc comment; might also include some odd
     //   artifacts of the parsing process)
-    if (this.ignore === true || this.memberof === '<anonymous>' || this.undocumented === true) {
+    if (
+      this.ignore === true ||
+      this.memberof === LONGNAMES.ANONYMOUS ||
+      this.undocumented === true
+    ) {
       return false;
     }
 
@@ -515,20 +626,59 @@ export class Doclet {
     return true;
   }
 
+  #defineWatchableProp(prop) {
+    Object.defineProperty(this, prop, {
+      configurable: false,
+      enumerable: true,
+      get() {
+        return this.watchableProps[prop];
+      },
+      set(newValue) {
+        this.watchableProps[prop] = newValue;
+      },
+    });
+  }
+
+  #onChangeHandler(boundEmitDocletChanged, propertyPath, newValue, oldValue) {
+    let index;
+    let newArray;
+    let oldArray;
+    const property = propertyPath[0];
+
+    // Handle changes to arrays, like: `doclet.listens[0] = 'event:foo';`
+    if (propertyPath.length > 1) {
+      newArray = this.watchableProps[property].slice();
+
+      oldArray = newArray.slice();
+      // Update `oldArray` to contain the original value.
+      index = propertyPath[propertyPath.length - 1];
+      oldArray[index] = oldValue;
+
+      boundEmitDocletChanged(property, oldArray, newArray);
+    }
+    // Handle changes to primitive values.
+    else if (newValue !== oldValue) {
+      boundEmitDocletChanged(property, oldValue, newValue);
+    }
+  }
+
   /**
-   * Set the doclet's `longname` property.
+   * Sets the doclet's `longname` property.
    *
    * @param {string} longname - The longname for the doclet.
    */
   setLongname(longname) {
+    longname = removeGlobal(longname);
+    if (this.#dictionary.isNamespace(this.kind)) {
+      longname = applyNamespace(longname, this.kind);
+    }
+
     /**
      * The fully resolved symbol name.
+     *
      * @type {string}
      */
-    this.longname = removeGlobal(longname);
-    if (this.#dictionary.isNamespace(this.kind)) {
-      this.longname = applyNamespace(this.longname, this.kind);
-    }
+    this.longname = longname;
   }
 
   /**
@@ -539,6 +689,7 @@ export class Doclet {
   setMemberof(sid) {
     /**
      * The longname of the symbol that contains this one, if any.
+     *
      * @type {string}
      */
     this.memberof = removeGlobal(sid)
@@ -547,8 +698,8 @@ export class Doclet {
   }
 
   /**
-   * Set the doclet's `scope` property. Must correspond to a scope name that is defined in
-   * {@link module:@jsdoc/core.name.SCOPE.NAMES}.
+   * Sets the doclet's `scope` property. Must correspond to a scope name that is defined in
+   * {@link module:@jsdoc/name.SCOPE.NAMES}.
    *
    * @param {string} scope - The scope for the doclet relative to the symbol's parent.
    * @throws {Error} If the scope name is not recognized.
@@ -556,14 +707,13 @@ export class Doclet {
   setScope(scope) {
     let errorMessage;
     let filepath;
-    const scopeNames = _.values(SCOPE.NAMES);
 
-    if (!scopeNames.includes(scope)) {
+    if (!ALL_SCOPE_NAMES.includes(scope)) {
       filepath = getFilepath(this);
 
       errorMessage =
-        `The scope name "${scope}" is not recognized. Use one of the ` +
-        `following values: ${scopeNames}`;
+        `The scope name "${scope}" is not recognized. Use one of the following values: ` +
+        `${ALL_SCOPE_NAMES}`;
       if (filepath) {
         errorMessage += ` (Source file: ${filepath})`;
       }
@@ -575,10 +725,10 @@ export class Doclet {
   }
 
   /**
-   * Add a symbol to this doclet's `borrowed` array.
+   * Adds a symbol to the doclet's `borrowed` array.
    *
-   * @param {string} source - The longname of the symbol that is the source.
-   * @param {string} target - The name the symbol is being assigned to.
+   * @param {string} source - The longname of the symbol that is borrowed.
+   * @param {string} target - The name that the borrowed symbol is assigned to.
    */
   borrow(source, target) {
     const about = { from: source };
@@ -587,57 +737,67 @@ export class Doclet {
       about.as = target;
     }
 
-    if (!this.borrowed) {
-      /**
-       * A list of symbols that are borrowed by this one, if any.
-       * @type {Array.<string>}
-       */
-      this.borrowed = [];
-    }
+    /**
+     * A list of symbols that are borrowed by this one, if any.
+     *
+     * @type {Array<string>}
+     */
+    this.borrowed ??= [];
     this.borrowed.push(about);
   }
 
+  /**
+   * Adds a symbol to the doclet's `mixes` array.
+   *
+   * @param {string} source - The longname of the symbol that is mixed in.
+   */
   mix(source) {
     /**
      * A list of symbols that are mixed into this one, if any.
-     * @type Array.<string>
+     *
+     * @type {Array<string>}
      */
-    this.mixes = this.mixes || [];
+    this.mixes ??= [];
     this.mixes.push(source);
   }
 
   /**
-   * Add a symbol to the doclet's `augments` array.
+   * Adds a symbol to the doclet's `augments` array.
    *
    * @param {string} base - The longname of the base symbol.
    */
   augment(base) {
     /**
      * A list of symbols that are augmented by this one, if any.
-     * @type Array.<string>
+     *
+     * @type {Array<string>}
      */
-    this.augments = this.augments || [];
+    this.augments ??= [];
     this.augments.push(base);
   }
 
+  // TODO: Add typedef for `meta`.
   /**
-   * Set the `meta` property of this doclet.
+   * Sets the `meta` property of the doclet, which contains metadata about the source code that the
+   * doclet corresponds to.
    *
-   * @param {object} meta
+   * @param {object} meta - The data to add to the doclet.
    */
   setMeta(meta) {
     let pathname;
 
     /**
      * Information about the source code associated with this doclet.
+     *
      * @namespace
      */
-    this.meta = this.meta || {};
+    this.meta ??= {};
 
     if (meta.range) {
       /**
        * The positions of the first and last characters of the code associated with this doclet.
-       * @type Array.<number>
+       *
+       * @type {Array<number>}
        */
       this.meta.range = meta.range.slice();
     }
@@ -645,17 +805,20 @@ export class Doclet {
     if (meta.lineno) {
       /**
        * The name of the file containing the code associated with this doclet.
-       * @type string
+       *
+       * @type {string}
        */
       this.meta.filename = path.basename(meta.filename);
       /**
        * The line number of the code associated with this doclet.
-       * @type number
+       *
+       * @type {number}
        */
       this.meta.lineno = meta.lineno;
       /**
        * The column number of the code associated with this doclet.
-       * @type number
+       *
+       * @type {number}
        */
       this.meta.columnno = meta.columnno;
 
@@ -667,9 +830,10 @@ export class Doclet {
 
     /**
      * Information about the code symbol.
+     *
      * @namespace
      */
-    this.meta.code = this.meta.code || {};
+    this.meta.code ??= {};
     if (meta.id) {
       this.meta.code.id = meta.id;
     }
@@ -677,6 +841,7 @@ export class Doclet {
       if (meta.code.name) {
         /**
          * The name of the symbol in the source code.
+         *
          * @type {string}
          */
         this.meta.code.name = meta.code.name;
@@ -684,6 +849,7 @@ export class Doclet {
       if (meta.code.type) {
         /**
          * The type of the symbol in the source code.
+         *
          * @type {string}
          */
         this.meta.code.type = meta.code.type;
@@ -697,9 +863,10 @@ export class Doclet {
       if (meta.code.funcscope) {
         this.meta.code.funcscope = meta.code.funcscope;
       }
-      if (typeof meta.code.value !== 'undefined') {
+      if (!_.isUndefined(meta.code.value)) {
         /**
          * The value of the symbol in the source code.
+         *
          * @type {*}
          */
         this.meta.code.value = meta.code.value;
@@ -709,27 +876,4 @@ export class Doclet {
       }
     }
   }
-}
-
-/**
- * Combine two doclets into a new doclet.
- *
- * @param {module:@jsdoc/doclet.Doclet} primary - The doclet whose properties will be used.
- * @param {module:@jsdoc/doclet.Doclet} secondary - The doclet to use as a fallback for properties
- * that the primary doclet does not have.
- * @returns {module:@jsdoc/doclet.Doclet} A new doclet that combines the primary and secondary
- * doclets.
- */
-export function combineDoclets(primary, secondary) {
-  const copyMostPropertiesExclude = ['dependencies', 'params', 'properties', 'undocumented'];
-  const copySpecificPropertiesInclude = ['params', 'properties'];
-  const target = new Doclet('', null, secondary.dependencies);
-
-  // First, copy most properties to the target doclet.
-  copyMostProperties(primary, secondary, target, copyMostPropertiesExclude);
-  // Then copy a few specific properties to the target doclet, as long as they're not falsy and
-  // have a length greater than 0.
-  copySpecificProperties(primary, secondary, target, copySpecificPropertiesInclude);
-
-  return target;
-}
+};

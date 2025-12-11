@@ -1,6 +1,6 @@
 {
   "name": "@jsdoc/parse",
-  "version": "0.3.1",
+  "version": "0.3.13",
   "description": "Parses, and extracts information from, source code.",
   "keywords": [
     "jsdoc"
@@ -13,11 +13,13 @@
     "access": "public"
   },
   "dependencies": {
-    "@jsdoc/ast": "^0.2.1",
-    "@jsdoc/core": "^0.5.1",
-    "@jsdoc/doclet": "^0.2.1",
-    "@jsdoc/util": "^0.3.0",
+    "@jsdoc/ast": "^0.2.13",
+    "@jsdoc/doclet": "^0.2.13",
+    "@jsdoc/name": "^0.1.1",
     "escape-string-regexp": "^5.0.0"
+  },
+  "engines": {
+    "node": "^20.19.0 || ^22.12.0 || >=23.0.0"
   },
   "repository": {
     "type": "git",

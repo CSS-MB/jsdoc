@@ -13,10 +13,10 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
+
 import path from 'node:path';
 
-import { name } from '@jsdoc/core';
-import { log } from '@jsdoc/util';
+import * as name from '@jsdoc/name';
 import commonPathPrefix from 'common-path-prefix';
 import _ from 'lodash';
 
@@ -74,7 +74,7 @@ export function setDocletKindToTitle(doclet, { title }) {
   doclet.addTag('kind', title);
 }
 
-export function setDocletScopeToTitle(doclet, { title }) {
+export function setDocletScopeToTitle(doclet, { title }, { log }) {
   try {
     doclet.setScope(title);
   } catch (e) {
@@ -120,8 +120,7 @@ export function setNameToFile(doclet) {
   let docletName;
 
   if (doclet.meta.filename) {
-    docletName =
-      filepathMinusPrefix(doclet.meta.path, doclet.dependencies.get('env')) + doclet.meta.filename;
+    docletName = filepathMinusPrefix(doclet.meta.path, doclet.env) + doclet.meta.filename;
     doclet.addTag('name', docletName);
   }
 }
@@ -150,7 +149,7 @@ export function setDocletNameToFilename(doclet) {
   let docletName = '';
 
   if (doclet.meta.path) {
-    docletName = filepathMinusPrefix(doclet.meta.path, doclet.dependencies.get('env'));
+    docletName = filepathMinusPrefix(doclet.meta.path, doclet.env);
   }
   // TODO: Drop the file extension regardless of what it is.
   docletName += doclet.meta.filename.replace(/\.js$/i, '');

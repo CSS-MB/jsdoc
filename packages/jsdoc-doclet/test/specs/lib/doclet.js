@@ -13,8 +13,8 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
-/* global jsdoc */
-import { name } from '@jsdoc/core';
+
+import { SCOPE } from '@jsdoc/name';
 import _ from 'lodash';
 
 import * as doclet from '../../../lib/doclet.js';
@@ -22,7 +22,6 @@ import { DOCLET_SCHEMA } from '../../../lib/schema.js';
 
 const ACCESS_VALUES = DOCLET_SCHEMA.properties.access.enum.concat([undefined]);
 const { Doclet } = doclet;
-const { SCOPE } = name;
 
 describe('@jsdoc/doclet/lib/doclet', () => {
   // TODO: more tests
@@ -30,85 +29,19 @@ describe('@jsdoc/doclet/lib/doclet', () => {
     expect(doclet).toBeObject();
   });
 
-  it('has a combineDoclets method', () => {
-    expect(doclet.combineDoclets).toBeFunction();
-  });
-
   it('has a Doclet class', () => {
     expect(doclet.Doclet).toBeFunction();
   });
 
-  describe('combineDoclets', () => {
-    it('overrides most properties of the secondary doclet', () => {
-      const primaryDoclet = new Doclet(
-        '/** New and improved!\n@version 2.0.0 */',
-        null,
-        jsdoc.deps
-      );
-      const secondaryDoclet = new Doclet('/** Hello!\n@version 1.0.0 */', null, jsdoc.deps);
-      const newDoclet = doclet.combineDoclets(primaryDoclet, secondaryDoclet);
-
-      Object.getOwnPropertyNames(newDoclet).forEach((property) => {
-        expect(newDoclet[property]).toEqual(primaryDoclet[property]);
-      });
-    });
-
-    it('adds properties from the secondary doclet that are missing', () => {
-      const primaryDoclet = new Doclet('/** Hello!\n@version 2.0.0 */', null, jsdoc.deps);
-      const secondaryDoclet = new Doclet('/** Hello! */', null, jsdoc.deps);
-      const newDoclet = doclet.combineDoclets(primaryDoclet, secondaryDoclet);
-
-      expect(newDoclet.version).toBe('2.0.0');
-    });
-
-    describe('params and properties', () => {
-      const properties = ['params', 'properties'];
-
-      it('uses params and properties from the secondary doclet if the primary lacks them', () => {
-        const primaryDoclet = new Doclet('/** Hello! */', null, jsdoc.deps);
-        const secondaryComment = [
-          '/**',
-          ' * @param {string} foo - The foo.',
-          ' * @property {number} bar - The bar.',
-          ' */',
-        ].join('\n');
-        const secondaryDoclet = new Doclet(secondaryComment, null, jsdoc.deps);
-        const newDoclet = doclet.combineDoclets(primaryDoclet, secondaryDoclet);
-
-        properties.forEach((property) => {
-          expect(newDoclet[property]).toEqual(secondaryDoclet[property]);
-        });
-      });
-
-      it('uses params and properties from the primary doclet, if present', () => {
-        const primaryComment = [
-          '/**',
-          ' * @param {number} baz - The baz.',
-          ' * @property {string} qux - The qux.',
-          ' */',
-        ].join('\n');
-        const primaryDoclet = new Doclet(primaryComment, null, jsdoc.deps);
-        const secondaryComment = [
-          '/**',
-          ' * @param {string} foo - The foo.',
-          ' * @property {number} bar - The bar.',
-          ' */',
-        ].join('\n');
-        const secondaryDoclet = new Doclet(secondaryComment, null, jsdoc.deps);
-        const newDoclet = doclet.combineDoclets(primaryDoclet, secondaryDoclet);
-
-        properties.forEach((property) => {
-          expect(newDoclet[property]).toEqual(primaryDoclet[property]);
-        });
-      });
-    });
+  it('has a WATCHABLE_PROPS array', () => {
+    expect(doclet.WATCHABLE_PROPS).toBeArrayOfStrings();
   });
 
   describe('Doclet', () => {
-    function makeDoclet(tagStrings, deps) {
+    function makeDoclet(tagStrings, env) {
       const comment = `/**\n${tagStrings.join('\n')}\n*/`;
 
-      return new Doclet(comment, {}, deps || jsdoc.deps);
+      return new Doclet(comment, {}, env || jsdoc.env);
     }
 
     const docSet = jsdoc.getDocSetFromFile('test/fixtures/doclet.js');
@@ -300,6 +233,86 @@ describe('@jsdoc/doclet/lib/doclet', () => {
       xit('TODO: write tests');
     });
 
+    xdescribe('clone', () => {
+      xit('TODO: write tests');
+    });
+
+    describe('combineDoclets', () => {
+      it('overrides most properties of the secondary doclet', () => {
+        let descriptors;
+        const primaryDoclet = new Doclet(
+          '/** New and improved!\n@version 2.0.0 */',
+          null,
+          jsdoc.env
+        );
+        const secondaryDoclet = new Doclet('/** Hello!\n@version 1.0.0 */', null, jsdoc.env);
+        const newDoclet = Doclet.combineDoclets(primaryDoclet, secondaryDoclet);
+
+        descriptors = Object.getOwnPropertyDescriptors(newDoclet);
+        Object.keys(descriptors).forEach((property) => {
+          if (!descriptors[property].enumerable) {
+            return;
+          }
+
+          expect(newDoclet[property]).toEqual(primaryDoclet[property]);
+        });
+      });
+
+      it('adds properties from the secondary doclet that are missing', () => {
+        const primaryDoclet = new Doclet('/** Hello!\n@version 2.0.0 */', null, jsdoc.env);
+        const secondaryDoclet = new Doclet('/** Hello! */', null, jsdoc.env);
+        const newDoclet = Doclet.combineDoclets(primaryDoclet, secondaryDoclet);
+
+        expect(newDoclet.version).toBe('2.0.0');
+      });
+
+      describe('params and properties', () => {
+        const properties = ['params', 'properties'];
+
+        it('uses params and properties from the secondary doclet if the primary lacks them', () => {
+          const primaryDoclet = new Doclet('/** Hello! */', null, jsdoc.env);
+          const secondaryComment = [
+            '/**',
+            ' * @param {string} foo - The foo.',
+            ' * @property {number} bar - The bar.',
+            ' */',
+          ].join('\n');
+          const secondaryDoclet = new Doclet(secondaryComment, null, jsdoc.env);
+          const newDoclet = Doclet.combineDoclets(primaryDoclet, secondaryDoclet);
+
+          properties.forEach((property) => {
+            expect(newDoclet[property]).toEqual(secondaryDoclet[property]);
+          });
+        });
+
+        it('uses params and properties from the primary doclet, if present', () => {
+          const primaryComment = [
+            '/**',
+            ' * @param {number} baz - The baz.',
+            ' * @property {string} qux - The qux.',
+            ' */',
+          ].join('\n');
+          const primaryDoclet = new Doclet(primaryComment, null, jsdoc.env);
+          const secondaryComment = [
+            '/**',
+            ' * @param {string} foo - The foo.',
+            ' * @property {number} bar - The bar.',
+            ' */',
+          ].join('\n');
+          const secondaryDoclet = new Doclet(secondaryComment, null, jsdoc.env);
+          const newDoclet = Doclet.combineDoclets(primaryDoclet, secondaryDoclet);
+
+          properties.forEach((property) => {
+            expect(newDoclet[property]).toEqual(primaryDoclet[property]);
+          });
+        });
+      });
+    });
+
+    xdescribe('emptyDoclet', () => {
+      xit('TODO: write tests');
+    });
+
     describe('isGlobal', () => {
       it('identifies global constants', () => {
         const newDoclet = makeDoclet(['@constant', '@global', '@name foo']);
@@ -339,17 +352,14 @@ describe('@jsdoc/doclet/lib/doclet', () => {
     });
 
     describe('isVisible', () => {
-      function makeDeps(access) {
-        const config = _.cloneDeep(jsdoc.deps.get('config'));
-        const map = new Map();
+      function makeEnv(access) {
+        const env = _.cloneDeep(jsdoc.env);
 
         if (access) {
-          config.opts.access = access.slice();
+          env.config.opts.access = access.slice();
         }
-        map.set('config', config);
-        map.set('tags', jsdoc.deps.get('tags'));
 
-        return map;
+        return env;
       }
 
       it('returns `false` for ignored doclets', () => {
@@ -385,13 +395,13 @@ describe('@jsdoc/doclet/lib/doclet', () => {
           const newDoclet = makeDoclet(['@name foo', '@function']);
 
           // Just to be sure.
-          delete newDoclet.access;
+          newDoclet.access = undefined;
 
           expect(newDoclet.isVisible()).toBeTrue();
         });
 
         it('always returns `true` based on `doclet.access` when `access` config includes `all`', () => {
-          const fakeDeps = makeDeps(['all']);
+          const fakeEnv = makeEnv(['all']);
           const doclets = ACCESS_VALUES.map((value) => {
             let newDoclet;
             const tags = ['@function', '@name foo'];
@@ -399,10 +409,10 @@ describe('@jsdoc/doclet/lib/doclet', () => {
             if (value) {
               tags.push('@' + value);
             }
-            newDoclet = makeDoclet(tags, fakeDeps);
+            newDoclet = makeDoclet(tags, fakeEnv);
             // Just to be sure.
             if (!value) {
-              delete newDoclet.access;
+              newDoclet.access = undefined;
             }
 
             return newDoclet;
@@ -414,32 +424,32 @@ describe('@jsdoc/doclet/lib/doclet', () => {
         });
 
         it('returns `false` for `package` doclets when config omits `package`', () => {
-          const fakeDeps = makeDeps(['public']);
-          const newDoclet = makeDoclet(['@function', '@name foo', '@package'], fakeDeps);
+          const fakeEnv = makeEnv(['public']);
+          const newDoclet = makeDoclet(['@function', '@name foo', '@package'], fakeEnv);
 
           expect(newDoclet.isVisible()).toBeFalse();
         });
 
         it('returns `false` for `protected` doclets when config omits `protected`', () => {
-          const fakeDeps = makeDeps(['public']);
-          const newDoclet = makeDoclet(['@function', '@name foo', '@protected'], fakeDeps);
+          const fakeEnv = makeEnv(['public']);
+          const newDoclet = makeDoclet(['@function', '@name foo', '@protected'], fakeEnv);
 
           expect(newDoclet.isVisible()).toBeFalse();
         });
 
         it('returns `false` for `public` doclets when config omits `public`', () => {
-          const fakeDeps = makeDeps(['private']);
-          const newDoclet = makeDoclet(['@function', '@name foo', '@public'], fakeDeps);
+          const fakeEnv = makeEnv(['private']);
+          const newDoclet = makeDoclet(['@function', '@name foo', '@public'], fakeEnv);
 
           expect(newDoclet.isVisible()).toBeFalse();
         });
 
         it('returns `false` for undefined-access doclets when config omits `undefined`', () => {
-          const fakeDeps = makeDeps(['public']);
-          const newDoclet = makeDoclet(['@function', '@name foo'], fakeDeps);
+          const fakeEnv = makeEnv(['public']);
+          const newDoclet = makeDoclet(['@function', '@name foo'], fakeEnv);
 
           // Just to be sure.
-          delete newDoclet.access;
+          newDoclet.access = undefined;
 
           expect(newDoclet.isVisible()).toBeFalse();
         });
@@ -468,7 +478,7 @@ describe('@jsdoc/doclet/lib/doclet', () => {
       describe('setScope', () => {
         it('accepts the correct scope names', () => {
           function setScope(scopeName) {
-            const newDoclet = new Doclet('/** Huzzah, a doclet! */', null, jsdoc.deps);
+            const newDoclet = new Doclet('/** Huzzah, a doclet! */', null, jsdoc.env);
 
             newDoclet.setScope(scopeName);
           }
@@ -480,12 +490,82 @@ describe('@jsdoc/doclet/lib/doclet', () => {
 
         it('throws an error for invalid scope names', () => {
           function setScope() {
-            const newDoclet = new Doclet('/** Woe betide this doclet. */', null, jsdoc.deps);
+            const newDoclet = new Doclet('/** Woe betide this doclet. */', null, jsdoc.env);
 
             newDoclet.setScope('fiddlesticks');
           }
 
           expect(setScope).toThrow();
+        });
+      });
+
+      describe('watchable properties', () => {
+        const { emitter } = jsdoc.env;
+        let events;
+
+        function listener(e) {
+          events.push(e);
+        }
+
+        beforeEach(() => {
+          emitter.on('docletChanged', listener);
+          events = [];
+        });
+
+        afterEach(() => {
+          emitter.removeListener('docletChanged', listener);
+        });
+
+        it('sends events to the event bus when watchable properties change', () => {
+          const propValues = {
+            access: 'private',
+            augments: ['Foo'],
+            borrowed: true,
+            ignore: true,
+            implements: ['Foo'],
+            kind: 'class',
+            listens: ['event:foo'],
+            longname: 'foo',
+            memberof: 'foo',
+            mixes: ['foo'],
+            scope: 'static',
+            undocumented: true,
+          };
+          const keys = Object.keys(propValues);
+
+          // Make sure this test covers all watchable properties.
+          expect(keys).toEqual(doclet.WATCHABLE_PROPS);
+
+          keys.forEach((key) => {
+            const newDoclet = new Doclet('/** Huzzah, a doclet! */', null, jsdoc.env);
+
+            events = [];
+
+            // Generates first event.
+            newDoclet[key] = propValues[key];
+            // Generates second event.
+            newDoclet[key] = undefined;
+
+            expect(events.length).toBe(2);
+
+            expect(events[0]).toBeObject();
+            expect(events[0].doclet).toBe(newDoclet);
+            expect(events[0].property).toBe(key);
+            if (key === 'kind') {
+              expect(events[0].oldValue).toBe('member');
+            } else if (key === 'longname') {
+              expect(events[0].oldValue).toBeEmptyString();
+            } else {
+              expect(events[0].oldValue).toBeUndefined();
+            }
+            expect(events[0].newValue).toEqual(propValues[key]);
+
+            expect(events[1]).toBeObject();
+            expect(events[1].doclet).toBe(newDoclet);
+            expect(events[1].property).toBe(key);
+            expect(events[1].oldValue).toEqual(propValues[key]);
+            expect(events[1].newValue).toBeUndefined();
+          });
         });
       });
     });

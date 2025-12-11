@@ -13,21 +13,18 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
-import RealEngine from '../../../lib/engine.js';
-import flags from '../../../lib/flags.js';
+
+import EventEmitter from 'node:events';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { DocletStore } from '@jsdoc/doclet';
+
+import Engine from '../../../lib/engine.js';
+import { flags } from '../../../lib/flags.js';
 import { LEVELS } from '../../../lib/logger.js';
 
 const TYPE_ERROR = 'TypeError';
-
-// Wrapper to prevent reuse of the event bus, which leads to `MaxListenersExceededWarning` messages.
-class Engine extends RealEngine {
-  constructor(opts) {
-    opts = opts || {};
-    opts._cacheEventBus = false;
-
-    super(opts);
-  }
-}
 
 describe('@jsdoc/cli/lib/engine', () => {
   it('exists', () => {
@@ -42,6 +39,14 @@ describe('@jsdoc/cli/lib/engine', () => {
     expect(Engine.LOG_LEVELS).toBeObject();
   });
 
+  it('has an `api` property that contains the API instance', () => {
+    expect(new Engine().api).toBeObject();
+  });
+
+  it('has an `emitter` property that contains a shared event emitter', () => {
+    expect(new Engine().emitter).toBeObject();
+  });
+
   it('has an empty array of flags by default', () => {
     expect(new Engine().flags).toBeEmptyArray();
   });
@@ -52,6 +57,10 @@ describe('@jsdoc/cli/lib/engine', () => {
 
   it('has a logLevel property that defaults to LEVELS.WARN', () => {
     expect(new Engine().logLevel).toBe(LEVELS.WARN);
+  });
+
+  it('has a shouldExitWithError property that defaults to false', () => {
+    expect(new Engine().shouldExitWithError).toBeFalse();
   });
 
   it('has an undefined revision property by default', () => {
@@ -88,6 +97,7 @@ describe('@jsdoc/cli/lib/engine', () => {
     const instance = new Engine({ revision });
 
     expect(instance.revision).toBe(revision);
+    expect(instance.env.version.revision).toBe(revision.toUTCString());
   });
 
   it('throws if the revision is not a date', () => {
@@ -95,11 +105,282 @@ describe('@jsdoc/cli/lib/engine', () => {
   });
 
   it('sets the version if provided', () => {
-    expect(new Engine({ version: '1.2.3' }).version).toBe('1.2.3');
+    const instance = new Engine({ version: '1.2.3' });
+
+    expect(instance.version).toBe('1.2.3');
+    expect(instance.env.version.number).toBe('1.2.3');
   });
 
   it('throws if the version is not a string', () => {
     expect(() => new Engine({ version: 1 })).toThrow();
+  });
+
+  describe('configureLogger', () => {
+    let instance;
+    const { LOG_LEVELS } = Engine;
+
+    beforeEach(() => {
+      instance = new Engine();
+    });
+
+    it('changes the log level to `DEBUG` if the `debug` option is enabled', () => {
+      const { options } = instance.env;
+
+      options.debug = true;
+      instance.configureLogger();
+
+      expect(instance.logLevel).toBe(LOG_LEVELS.DEBUG);
+    });
+
+    it('changes the log level to `INFO` if the `verbose` option is enabled', () => {
+      const { options } = instance.env;
+
+      options.verbose = true;
+      instance.configureLogger();
+
+      expect(instance.logLevel).toBe(LOG_LEVELS.INFO);
+    });
+
+    it('changes the log level to `SILENT` while running tests', () => {
+      const { options } = instance.env;
+
+      options.test = true;
+      instance.configureLogger();
+
+      expect(instance.logLevel).toBe(LOG_LEVELS.SILENT);
+    });
+
+    it('tells the engine to exit later, with an error, if an `ERROR` log entry is emitted', () => {
+      const emitter = instance.emitter;
+
+      instance.configureLogger();
+      instance.logLevel = LOG_LEVELS.SILENT;
+      emitter.emit('logger:error', 'oh no!');
+
+      expect(instance.shouldExitWithError).toBeTrue();
+    });
+
+    it('tells the engine to exit now, with an error, if a `FATAL` log entry is emitted', () => {
+      const emitter = instance.emitter;
+
+      instance.configureLogger();
+      instance.logLevel = LOG_LEVELS.SILENT;
+      spyOn(instance, 'exit');
+      emitter.emit('logger:fatal', 'oh no!');
+
+      expect(instance.exit).toHaveBeenCalledOnceWith(1);
+    });
+
+    describe('pedantic', () => {
+      beforeEach(() => {
+        const { options } = instance.env;
+
+        options.pedantic = true;
+      });
+
+      it('tells the engine to exit later, with an error, if a `WARN` log entry is emitted', () => {
+        const emitter = instance.emitter;
+
+        instance.configureLogger();
+        instance.logLevel = LOG_LEVELS.SILENT;
+        emitter.emit('logger:warn', 'oh no!');
+
+        expect(instance.shouldExitWithError).toBeTrue();
+      });
+
+      it('tells the engine to exit now, with an error, if an `ERROR` log entry is emitted', () => {
+        const emitter = instance.emitter;
+
+        instance.configureLogger();
+        instance.logLevel = LOG_LEVELS.SILENT;
+        spyOn(instance, 'exit');
+        emitter.emit('logger:error', 'oh no!');
+
+        expect(instance.exit).toHaveBeenCalledOnceWith(1);
+      });
+    });
+  });
+
+  describe('dumpParseResults', () => {
+    let api;
+    let docletStore;
+    let env;
+    let instance;
+    let jsonDoclets;
+    let reparsedDoclets;
+    const sourceFile = fileURLToPath(new URL('../../fixtures/ignored-doclet.js', import.meta.url));
+
+    beforeEach(() => {
+      docletStore = null;
+      instance = new Engine();
+      api = instance.api;
+      env = instance.env;
+      env.conf.tags = {
+        dictionaries: ['jsdoc'],
+      };
+      jsonDoclets = null;
+      spyOn(console, 'log').and.callFake((value) => {
+        jsonDoclets = value;
+      });
+    });
+
+    afterEach(() => {
+      if (docletStore) {
+        docletStore.stopListening();
+      }
+    });
+
+    it('only dumps visible doclets by default', async () => {
+      docletStore = await api.parseSourceFiles([sourceFile]);
+      instance.dumpParseResults(docletStore);
+      reparsedDoclets = JSON.parse(jsonDoclets);
+
+      expect(reparsedDoclets.length).toBe(1);
+      expect(reparsedDoclets[0].kind).toBe('class');
+      expect(reparsedDoclets[0].name).toBe('NiceClass');
+    });
+
+    it('dumps all doclets when the `debug` option is set', async () => {
+      env.opts.debug = true;
+      docletStore = await api.parseSourceFiles([sourceFile]);
+      instance.dumpParseResults(docletStore);
+      reparsedDoclets = JSON.parse(jsonDoclets).filter((d) => d.kind === 'class');
+
+      expect(reparsedDoclets.length).toBe(2);
+      expect(reparsedDoclets[0].name).toBe('NiceClass');
+      expect(reparsedDoclets[1].name).toBe('NotSoNiceClass');
+    });
+
+    it('dumps all doclets when the `verbose` option is set', async () => {
+      env.opts.verbose = true;
+      docletStore = await api.parseSourceFiles([sourceFile]);
+      instance.dumpParseResults(docletStore);
+      reparsedDoclets = JSON.parse(jsonDoclets).filter((d) => d.kind === 'class');
+
+      expect(reparsedDoclets.length).toBe(2);
+      expect(reparsedDoclets[0].name).toBe('NiceClass');
+      expect(reparsedDoclets[1].name).toBe('NotSoNiceClass');
+    });
+  });
+
+  describe('emitter', () => {
+    it('creates an `EventEmitter` instance by default', () => {
+      expect(new Engine().emitter).toBeInstanceOf(EventEmitter);
+    });
+
+    it('lets you provide the emitter', () => {
+      const fakeEmitter = {
+        off: () => null,
+        on: () => null,
+        once: () => null,
+      };
+      const instance = new Engine({ emitter: fakeEmitter });
+
+      expect(instance.emitter).toBe(fakeEmitter);
+    });
+
+    it('shares one emitter between the `Api` instance and the `Engine` instance', () => {
+      const instance = new Engine();
+
+      expect(instance.emitter).toBe(instance.api.emitter);
+    });
+  });
+
+  describe('exit', () => {
+    // TODO: This is testing implementation details, not behavior. Refactor the method, then rewrite
+    // this test to test the behavior.
+    it('adds one listener for `exit` events if the exit code is 0', () => {
+      spyOn(process, 'on');
+
+      new Engine().exit(0);
+
+      expect(process.on).toHaveBeenCalledTimes(1);
+    });
+
+    it('adds two listeners for `exit` events if the exit code is >0', () => {
+      spyOn(process, 'on');
+
+      new Engine().exit(1);
+
+      expect(process.on).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('generate', () => {
+    let api;
+    let docletStore;
+    let env;
+    let instance;
+
+    beforeEach(() => {
+      instance = new Engine();
+      env = instance.env;
+      env.sourceFiles = [
+        fileURLToPath(new URL('../../fixtures/ignored-doclet.js', import.meta.url)),
+      ];
+      api = instance.api;
+      docletStore = new DocletStore(jsdoc.env);
+
+      spyOn(api, 'findSourceFiles');
+      spyOn(api, 'generateDocs');
+      spyOn(api, 'parseSourceFiles').and.returnValue(docletStore);
+    });
+
+    afterEach(() => {
+      docletStore.stopListening();
+    });
+
+    it('looks for source files', async () => {
+      await instance.generate();
+
+      expect(api.findSourceFiles).toHaveBeenCalled();
+    });
+
+    it('logs a message if no source files are found', async () => {
+      env.sourceFiles = [];
+      spyOn(console, 'log');
+      await instance.generate();
+
+      expect(api.findSourceFiles).toHaveBeenCalled();
+      expect(console.log).toHaveBeenCalled();
+      expect(api.parseSourceFiles).not.toHaveBeenCalled();
+    });
+
+    it('parses the source files', async () => {
+      await instance.generate();
+
+      expect(api.parseSourceFiles).toHaveBeenCalled();
+    });
+
+    it('generates output files by default', async () => {
+      await instance.generate();
+
+      expect(api.generateDocs).toHaveBeenCalled();
+      expect(api.generateDocs.calls.argsFor(0)[0]).toBeInstanceOf(DocletStore);
+    });
+
+    it('dumps the parse results if requested', async () => {
+      env.options.explain = true;
+      spyOn(instance, 'dumpParseResults');
+      await instance.generate();
+
+      expect(instance.dumpParseResults).toHaveBeenCalled();
+      expect(instance.dumpParseResults.calls.argsFor(0)[0]).toBeInstanceOf(DocletStore);
+    });
+
+    it('sets env.run.finish if there are no source files', async () => {
+      env.sourceFiles = [];
+      spyOn(console, 'log');
+      await instance.generate();
+
+      expect(env.run.finish).toBeInstanceOf(Date);
+    });
+
+    it('sets env.run.finish if there are source files', async () => {
+      await instance.generate();
+
+      expect(env.run.finish).toBeInstanceOf(Date);
+    });
   });
 
   describe('help', () => {
@@ -128,6 +409,61 @@ describe('@jsdoc/cli/lib/engine', () => {
 
     it('throws on a bad maxLength option', () => {
       expect(() => instance.help({ maxLength: 'long' })).toThrow();
+    });
+  });
+
+  describe('loadConfig', () => {
+    const configPath = path.resolve(
+      path.join(jsdoc.dirname(import.meta.url), '../../fixtures/configs/conf.json')
+    );
+    let instance;
+
+    beforeEach(() => {
+      instance = new Engine();
+      instance.env.options.configure = configPath;
+    });
+
+    it('parses the command-line flags', async () => {
+      instance.env.args = ['-p', '-v'];
+
+      await instance.loadConfig();
+
+      expect(instance.env.options.private).toBeTrue();
+      expect(instance.env.options.version).toBeTrue();
+    });
+
+    it('exits if the command-line flags cannot be parsed', async () => {
+      instance.env.args = ['--not-a-real-flag'];
+
+      spyOn(instance, 'exit');
+      try {
+        await instance.loadConfig();
+
+        // We shouldn't get here.
+        expect(false).toBeTrue();
+      } catch (e) {
+        // Expected exit code.
+        expect(instance.exit.calls.argsFor(0)[0]).toBe(1);
+        // Expected error message.
+        expect(instance.exit.calls.argsFor(0)[1]).toContain(
+          'Unknown command-line option: --not-a-real-flag'
+        );
+      }
+    });
+
+    it('adds the config info to the JSDoc environment', async () => {
+      await instance.loadConfig();
+
+      expect(instance.env.config.sourceType).toBe('script');
+    });
+
+    it('merges the command-line flags from the config file with the real flags', async () => {
+      instance.env.args = ['-p'];
+
+      await instance.loadConfig();
+
+      expect(instance.env.options.private).toBeTrue();
+      expect(instance.env.options.version).toBeTrue();
     });
   });
 
@@ -214,6 +550,59 @@ describe('@jsdoc/cli/lib/engine', () => {
     });
   });
 
+  describe('printHelp', () => {
+    beforeEach(() => {
+      spyOn(console, 'log');
+    });
+
+    it('returns a promise that resolves to 0', async () => {
+      const instance = new Engine({ version: '1.2.3' });
+      const returnValue = await instance.printHelp();
+
+      expect(returnValue).toBe(0);
+    });
+
+    it('prints the version number, then the help text', () => {
+      const instance = new Engine({ version: '1.2.3' });
+
+      instance.printHelp();
+
+      expect(console.log.calls.argsFor(0)[0]).toContain('JSDoc 1.2.3');
+      expect(console.log.calls.argsFor(1)[0]).not.toContain('JSDoc 1.2.3');
+      expect(console.log.calls.argsFor(1)[0]).toContain('-v, --version');
+    });
+  });
+
+  describe('printVersion', () => {
+    beforeEach(() => {
+      spyOn(console, 'log');
+    });
+
+    it('returns a promise that resolves to 0', async () => {
+      const instance = new Engine({ version: '1.2.3' });
+      const returnValue = await instance.printVersion();
+
+      expect(returnValue).toBe(0);
+    });
+
+    it('prints the version number', () => {
+      const instance = new Engine({ version: '1.2.3' });
+
+      instance.printVersion();
+
+      expect(console.log).toHaveBeenCalledOnceWith('JSDoc 1.2.3');
+    });
+
+    it('prints the revision if present', () => {
+      const date = new Date(1700000000000);
+      const instance = new Engine({ version: '1.2.3', revision: date });
+
+      instance.printVersion();
+
+      expect(console.log).toHaveBeenCalledOnceWith('JSDoc 1.2.3 (Tue, 14 Nov 2023 22:13:20 GMT)');
+    });
+  });
+
   describe('versionDetails', () => {
     it('works with a version but no revision', () => {
       const instance = new Engine({ version: '1.2.3' });
@@ -233,6 +622,15 @@ describe('@jsdoc/cli/lib/engine', () => {
       const instance = new Engine({
         version: '1.2.3',
         revision,
+      });
+
+      expect(instance.versionDetails).toBe(`JSDoc 1.2.3 (${revision.toUTCString()})`);
+    });
+
+    it('works when `opts.version` is an object', () => {
+      const revision = new Date();
+      const instance = new Engine({
+        version: { number: '1.2.3', revision: revision.toUTCString() },
       });
 
       expect(instance.versionDetails).toBe(`JSDoc 1.2.3 (${revision.toUTCString()})`);

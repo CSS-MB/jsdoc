@@ -13,11 +13,19 @@
   See the License for the specific language governing permissions and
   limitations under the License.
 */
+
+/**
+ * Provides classes and methods related to _doclets_, which contain the information that JSDoc
+ * extracts from your source files.
+ *
+ * @module @jsdoc/doclet
+ */
 import * as augment from './lib/augment.js';
 import { resolveBorrows } from './lib/borrow.js';
-import { combineDoclets, Doclet } from './lib/doclet.js';
+import { Doclet } from './lib/doclet.js';
+import { DocletStore } from './lib/doclet-store.js';
 import { Package } from './lib/package.js';
 import * as schema from './lib/schema.js';
 
-export { augment, combineDoclets, Doclet, Package, resolveBorrows, schema };
-export default { augment, combineDoclets, Doclet, Package, resolveBorrows, schema };
+export { augment, Doclet, DocletStore, Package, resolveBorrows, schema };
+export default { augment, Doclet, DocletStore, Package, resolveBorrows, schema };
